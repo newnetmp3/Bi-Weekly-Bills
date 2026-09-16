@@ -9,6 +9,7 @@ Version 1.0 makes the desktop application the primary interface and SQLite the s
 - **Start here:** [Bi-Weekly Bills 1.0 User Guide](docs/USER_GUIDE.md)
 - **What shipped:** [Version 1.0 Release Notes](docs/RELEASE_NOTES_1.0.md)
 - **Technical desktop reference:** [Desktop Application](docs/DESKTOP_APP.md)
+- **User Wiki:** [GitHub Wiki](https://github.com/newnetmp3/Bi-Weekly-Bills/wiki)
 
 The application reads bank data and records/reconciles bill activity. It **does not initiate bank transfers or bill payments**.
 
