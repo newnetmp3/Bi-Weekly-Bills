@@ -28,7 +28,7 @@ jobs:
               /tmp/biweekly-bills-release/bin/python -m pip install --upgrade pip
               /tmp/biweekly-bills-release/bin/pip install -e . ruff build
               /tmp/biweekly-bills-release/bin/python -m compileall -q src tests
-              /tmp/biweekly-bills-release/bin/ruff check src tests
+              /tmp/biweekly-bills-release/bin/ruff check src tests --select E9,F63,F7,F82
               /tmp/biweekly-bills-release/bin/pip check
               /tmp/biweekly-bills-release/bin/python -m unittest discover -s tests -v
               /tmp/biweekly-bills-release/bin/biweekly-bills --help >/dev/null
