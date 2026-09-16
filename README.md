@@ -1,6 +1,21 @@
 # Bi-Weekly Bills
 
-A PySide6 + SQLite desktop application for managing a 1st/15th household bill workflow, synchronizing bank balances and transactions through Plaid, reconciling payments, planning Bills Checking funding, and exporting monthly reports.
+## Why this app exists: the two-checking-account system
+
+**Bi-Weekly Bills is built around using two separate checking accounts on purpose.** That distinction is the core idea behind the application.
+
+1. **Primary Checking / Transfer Source** — the normal checking account where income is received and everyday money is kept.
+2. **Bills Checking** — a **separate checking account used only to hold money for scheduled automatic bill payments**.
+
+Instead of leaving money for upcoming bills mixed in with everyday spending money, Bi-Weekly Bills calculates how much needs to be moved into Bills Checking for the **1st** and **15th** pay-period cycles. You make that transfer between your own accounts, and the transferred money then stays in Bills Checking until the scheduled automatic payments post.
+
+The app exists to make that system practical: it tracks which bills are paid from Bills Checking, calculates the amount that should be transferred into it, compares that requirement with the available Bills Checking balance, watches the outgoing automatic payments, and reconciles those payments against the bills they were meant to cover.
+
+**Bills Checking is not another name for your normal checking account. It is intentionally a second checking account whose balance is reserved for bills.** If this budgeting method is unfamiliar, think of Bills Checking as a dedicated holding account for money that has already been set aside for upcoming automatic payments.
+
+Bi-Weekly Bills never moves the money itself. It tells you what should be funded and verifies what actually happened after the bank transactions post.
+
+The desktop application is built with PySide6 + SQLite and can synchronize balances and transactions through Plaid, reconcile payments, plan Bills Checking funding, and export monthly reports.
 
 ## Version 1.0
 
