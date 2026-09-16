@@ -1,0 +1,54 @@
+name: wiki-sync
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/wiki/**"
+      - ".github/workflows/wiki-sync.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  publish-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Publish version-controlled Wiki source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          WIKI_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
+          WORKDIR="$(mktemp -d)"
+          trap 'rm -rf "$WORKDIR"' EXIT
+
+          if git clone "$WIKI_URL" "$WORKDIR/wiki"; then
+            :
+          else
+            mkdir -p "$WORKDIR/wiki"
+            git -C "$WORKDIR/wiki" init
+            git -C "$WORKDIR/wiki" remote add origin "$WIKI_URL"
+          fi
+
+          find "$WORKDIR/wiki" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -a docs/wiki/. "$WORKDIR/wiki/"
+
+          git -C "$WORKDIR/wiki" config user.name "github-actions[bot]"
+          git -C "$WORKDIR/wiki" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$WORKDIR/wiki" add -A
+
+          if git -C "$WORKDIR/wiki" diff --cached --quiet; then
+            echo "Wiki already matches docs/wiki."
+            exit 0
+          fi
+
+          git -C "$WORKDIR/wiki" commit -m "Sync Wiki from docs/wiki"
+          git -C "$WORKDIR/wiki" branch -M master
+          git -C "$WORKDIR/wiki" push origin HEAD:master
