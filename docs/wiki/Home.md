@@ -1,8 +1,26 @@
 # Bi-Weekly Bills Wiki
 
-**Bi-Weekly Bills 1.0** is a PySide6 + SQLite desktop application for a 1st/15th household bill workflow. It synchronizes balances and transactions through Plaid, tracks recurring bills, reconciles outgoing payments, plans Bills Checking funding, and exports monthly reports.
+## Why Bi-Weekly Bills exists
 
-> **Safety boundary:** Bi-Weekly Bills reads bank data and records bill activity. It does **not** initiate bank transfers or bill payments.
+**Bi-Weekly Bills is designed around a two-checking-account budgeting system.** Understanding that system explains the entire application.
+
+- **Primary Checking / Transfer Source** is the normal checking account where income is received and everyday money is kept.
+- **Bills Checking** is a **separate checking account used only to hold money for scheduled automatic bill payments**.
+
+Money for upcoming bills is deliberately separated from everyday spending money. For each 1st/15th cycle, Bi-Weekly Bills calculates how much should be moved from Primary Checking into Bills Checking. You make that transfer between your own accounts, and the money remains in Bills Checking until the scheduled automatic payments post.
+
+The application then helps answer four questions:
+
+1. **How much should I transfer into Bills Checking?**
+2. **Which bills is that money reserved for?**
+3. **Did the automatic payments actually leave Bills Checking as expected?**
+4. **Is enough money still reserved for the rest of the cycle?**
+
+**Bills Checking is intentionally a second checking account, not a label for your ordinary checking account.** Think of it as a dedicated holding account for money that has already been set aside and should no longer be considered available for normal spending.
+
+Bi-Weekly Bills does **not** initiate transfers or bill payments. It calculates the funding requirement, tracks the two-account workflow, and verifies the bank activity after transactions post.
+
+**Bi-Weekly Bills 1.0** is a PySide6 + SQLite desktop application that can synchronize balances and transactions through Plaid, track recurring bills, reconcile outgoing payments, plan Bills Checking funding, and export monthly reports.
 
 ## Start here
 
