@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +11,7 @@ from odf import text as odf_text
 from odf.opendocument import OpenDocumentSpreadsheet
 from odf.style import Style, TableCellProperties, TextProperties
 from openpyxl import Workbook
+from openpyxl.chart import LineChart, Reference
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from reportlab.lib import colors
@@ -28,6 +30,25 @@ MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
 ]
+
+
+QUICK_FINANCIAL_REPORTS = (
+    ("funding_plan", "Bills Funding"),
+    ("merchant_spending", "Spending by Merchant"),
+    ("bill_trend_12m", "12-Month Bill Trend"),
+    ("needs_attention", "Needs Attention"),
+)
+
+OTHER_FINANCIAL_REPORTS = (
+    ("payment_variance", "Payment Variance"),
+    ("account_cash_flow", "Account Cash Flow"),
+    ("annual_bill_summary", "Annual Bill Summary"),
+    ("bill_cost_changes", "Bill Cost Changes"),
+)
+
+FINANCIAL_REPORT_LABELS = dict(
+    QUICK_FINANCIAL_REPORTS + OTHER_FINANCIAL_REPORTS
+)
 
 
 @dataclass(frozen=True)
@@ -835,3 +856,775 @@ def export_pdf(bundle: ReportBundle, path: Path) -> None:
     tx_table.setStyle(_pdf_table_style(font_size=7))
     story.append(tx_table)
     doc.build(story)
+
+
+def _month_sequence_ending(
+    year: int,
+    month: int,
+    count: int = 12,
+) -> list[tuple[int, int]]:
+    selected = int(year) * 12 + (int(month) - 1)
+    periods: list[tuple[int, int]] = []
+    for offset in range(count - 1, -1, -1):
+        value = selected - offset
+        periods.append((value // 12, (value % 12) + 1))
+    return periods
+
+
+def _financial_stem(
+    report_key: str,
+    year: int,
+    month: int,
+) -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return (
+        f"biweekly-bills-{report_key.replace('_', '-')}-"
+        f"{int(year):04d}-{int(month):02d}-{stamp}"
+    )
+
+
+def _financial_title(
+    ws,
+    title: str,
+    subtitle: str,
+    *,
+    header_row: int = 4,
+) -> None:
+    ws["A1"] = title
+    ws["A1"].font = Font(bold=True, size=16, color="C8FF3D")
+    ws["A1"].fill = PatternFill("solid", fgColor="10182B")
+    ws["A2"] = subtitle
+    ws["A2"].font = Font(italic=True, color="5F6B7A")
+    if header_row > 0:
+        ws.freeze_panes = f"A{header_row + 1}"
+
+
+def _format_currency_columns(ws, columns: tuple[int, ...], start_row: int) -> None:
+    for col in columns:
+        for row in range(start_row, ws.max_row + 1):
+            ws.cell(row=row, column=col).number_format = (
+                '$#,##0.00;[Red]-$#,##0.00'
+            )
+
+
+def _finalize_financial_sheet(
+    ws,
+    *,
+    header_row: int,
+    currency_columns: tuple[int, ...] = (),
+) -> None:
+    if ws.max_column:
+        _xlsx_header(ws, header_row, ws.max_column)
+    if ws.max_row >= header_row:
+        ws.auto_filter.ref = (
+            f"A{header_row}:{get_column_letter(ws.max_column)}{ws.max_row}"
+        )
+    if currency_columns:
+        _format_currency_columns(ws, currency_columns, header_row + 1)
+    _autowidth(ws)
+
+
+def _transaction_account_label(row: Any) -> str:
+    label = str(row["account_name"] or "(unknown account)")
+    if row["account_mask"]:
+        label += f" ••••{row['account_mask']}"
+    return label
+
+
+def _build_funding_report(
+    database: Database,
+    year: int,
+    month: int,
+) -> Workbook:
+    bundle = build_report_bundle(database, year, month)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Funding Summary"
+    _financial_title(
+        ws,
+        "Bills Checking Funding",
+        f"{bundle.month_label} · money reserved for automatic bill payments",
+        header_row=10,
+    )
+
+    account_label = bundle.funding.bills_account_name or "Not assigned"
+    if bundle.funding.bills_account_mask:
+        account_label += f" ••••{bundle.funding.bills_account_mask}"
+
+    summary_rows = [
+        ("Bills Checking", account_label),
+        ("Available balance", _money(bundle.funding.available_balance_cents)),
+        ("Remaining bills requiring funding", _money(bundle.funding.total_required_cents)),
+        ("Transfer needed for 1st", _money(bundle.funding.first_transfer_cents)),
+        ("Transfer needed for 15th", _money(bundle.funding.fifteenth_transfer_cents)),
+        ("Total transfer needed", _money(bundle.funding.total_transfer_cents)),
+        ("Bills included", bundle.funding.included_bill_count),
+        ("Bills needing setup review", bundle.funding.review_bill_count),
+    ]
+    for row_index, (label, value) in enumerate(summary_rows, start=3):
+        ws.cell(row=row_index, column=1, value=label)
+        ws.cell(row=row_index, column=2, value=value)
+        if isinstance(value, float):
+            ws.cell(row=row_index, column=2).number_format = (
+                '$#,##0.00;[Red]-$#,##0.00'
+            )
+
+    detail = wb.create_sheet("Bills to Fund")
+    _financial_title(
+        detail,
+        "Bills to Fund",
+        bundle.month_label,
+        header_row=4,
+    )
+    headers = [
+        "Cycle", "Bill", "Due", "Paid", "Remaining",
+        "Payment Account", "Transfer Source",
+    ]
+    detail.append([])
+    detail.append(headers)
+    # Move the appended header to row 4 after the title/subtitle rows.
+    for col, value in enumerate(headers, start=1):
+        detail.cell(row=4, column=col, value=value)
+    if detail.max_row > 4:
+        detail.delete_rows(3, detail.max_row - 4)
+    for row in bundle.funding_items:
+        detail.append([
+            row.cycle,
+            row.bill_name,
+            _money(row.due_cents),
+            _money(row.paid_cents),
+            _money(row.remaining_cents),
+            row.payment_account,
+            row.transfer_source,
+        ])
+    _finalize_financial_sheet(
+        detail,
+        header_row=4,
+        currency_columns=(3, 4, 5),
+    )
+    _autowidth(ws)
+    return wb
+
+
+def _build_merchant_spending_report(
+    database: Database,
+    year: int,
+    month: int,
+) -> Workbook:
+    environment = _report_environment(database)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Merchant Spending"
+    label = f"{MONTH_NAMES[month - 1]} {year}"
+    _financial_title(
+        ws,
+        "Spending by Merchant",
+        f"{label} · posted outflows; known internal/funding transfers excluded",
+        header_row=4,
+    )
+    headers = [
+        "Rank", "Merchant / Description", "Transactions",
+        "Total Outflow", "Average", "Largest", "Accounts",
+    ]
+    for col, value in enumerate(headers, start=1):
+        ws.cell(row=4, column=col, value=value)
+
+    aggregates: dict[str, dict[str, Any]] = {}
+    if environment is not None:
+        rows = database.list_bank_transactions(
+            environment,
+            limit=10000,
+            year=year,
+            month=month,
+        )
+        for row in rows:
+            if bool(row["pending"]):
+                continue
+            amount = int(row["amount_cents"] or 0)
+            if amount <= 0:
+                continue
+            if row["funding_validation_scope"] or row["internal_transfer_role"]:
+                continue
+            display = str(
+                row["merchant_name"] or row["name"] or "(unnamed transaction)"
+            ).strip()
+            key = display.casefold()
+            item = aggregates.setdefault(
+                key,
+                {
+                    "name": display,
+                    "count": 0,
+                    "total": 0,
+                    "largest": 0,
+                    "accounts": set(),
+                },
+            )
+            item["count"] += 1
+            item["total"] += amount
+            item["largest"] = max(item["largest"], amount)
+            item["accounts"].add(_transaction_account_label(row))
+
+    ranked = sorted(
+        aggregates.values(),
+        key=lambda item: (-int(item["total"]), str(item["name"]).casefold()),
+    )
+    for rank, item in enumerate(ranked, start=1):
+        count = int(item["count"])
+        total = int(item["total"])
+        ws.append([
+            rank,
+            item["name"],
+            count,
+            _money(total),
+            _money(round(total / count) if count else 0),
+            _money(int(item["largest"])),
+            ", ".join(sorted(item["accounts"])),
+        ])
+
+    _finalize_financial_sheet(
+        ws,
+        header_row=4,
+        currency_columns=(4, 5, 6),
+    )
+    return wb
+
+
+def _build_bill_trend_report(
+    database: Database,
+    year: int,
+    month: int,
+) -> Workbook:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "12-Month Trend"
+    _financial_title(
+        ws,
+        "12-Month Bill Trend",
+        f"12 months ending {MONTH_NAMES[month - 1]} {year}",
+        header_row=4,
+    )
+    headers = [
+        "Month", "Scheduled", "Paid", "Remaining",
+        "Bills Funding Transfer", "Bill Rows", "Paid Rows",
+    ]
+    for col, value in enumerate(headers, start=1):
+        ws.cell(row=4, column=col, value=value)
+
+    for selected_year, selected_month in _month_sequence_ending(year, month, 12):
+        summary = database.month_summary(selected_year, selected_month)
+        funding = build_funding_plan(database, selected_year, selected_month)
+        ws.append([
+            f"{MONTH_NAMES[selected_month - 1]} {selected_year}",
+            _money(summary.due_cents),
+            _money(summary.paid_cents),
+            _money(summary.remaining_cents),
+            _money(funding.total_transfer_cents),
+            summary.bill_count,
+            summary.paid_count,
+        ])
+
+    _finalize_financial_sheet(
+        ws,
+        header_row=4,
+        currency_columns=(2, 3, 4, 5),
+    )
+
+    if ws.max_row >= 6:
+        chart = LineChart()
+        chart.title = "Scheduled vs Paid"
+        chart.y_axis.title = "Dollars"
+        chart.x_axis.title = "Month"
+        data = Reference(ws, min_col=2, max_col=3, min_row=4, max_row=ws.max_row)
+        cats = Reference(ws, min_col=1, min_row=5, max_row=ws.max_row)
+        chart.add_data(data, titles_from_data=True)
+        chart.set_categories(cats)
+        chart.height = 7
+        chart.width = 13
+        ws.add_chart(chart, "I4")
+    return wb
+
+
+def _build_needs_attention_report(
+    database: Database,
+    year: int,
+    month: int,
+) -> Workbook:
+    environment = _report_environment(database)
+    label = f"{MONTH_NAMES[month - 1]} {year}"
+    wb = Workbook()
+    summary = wb.active
+    summary.title = "Summary"
+    _financial_title(
+        summary,
+        "Needs Attention",
+        f"{label} · items that may need a decision or setup correction",
+        header_row=7,
+    )
+
+    bill_rows: list[list[Any]] = []
+    for row in database.list_month_instances(year, month):
+        due = int(row["due_cents"] or 0)
+        paid = int(row["paid_cents"] or 0)
+        reasons: list[str] = []
+        if due > paid:
+            reasons.append("Amount still remaining")
+        if paid > 0 and not bool(row["bank_verified"]):
+            reasons.append("Paid but not bank verified")
+        payment_account = (
+            row["payment_account_snapshot"]
+            or _joined_bill_account_label(row, "payment_account")
+            or row["payment_account"]
+        )
+        if not payment_account:
+            reasons.append("Payment Account not set")
+        if reasons:
+            bill_rows.append([
+                row["cycle"],
+                row["bill_name_snapshot"],
+                _money(due),
+                _money(paid),
+                _money(max(due - paid, 0)),
+                row["status"],
+                "Yes" if row["bank_verified"] else "No",
+                payment_account or "—",
+                "; ".join(reasons),
+            ])
+
+    transaction_rows: list[list[Any]] = []
+    if environment is not None:
+        for row in database.list_bank_transactions(
+            environment,
+            limit=10000,
+            year=year,
+            month=month,
+        ):
+            if bool(row["pending"]):
+                continue
+            if row["reconciliation_disposition"] or row["funding_validation_scope"]:
+                continue
+            if row["internal_transfer_role"]:
+                continue
+            transaction_rows.append([
+                str(row["posted_date"] or row["authorized_date"] or ""),
+                str(row["merchant_name"] or row["name"] or "(unnamed transaction)"),
+                _transaction_account_label(row),
+                _money(int(row["amount_cents"] or 0)),
+                "Outflow" if int(row["amount_cents"] or 0) >= 0 else "Inflow",
+            ])
+
+    funding = build_funding_plan(database, year, month)
+    metrics = [
+        ("Bills needing attention", len(bill_rows)),
+        ("Unresolved posted transactions", len(transaction_rows)),
+        ("Funding setup items to review", funding.review_bill_count),
+        ("Remaining scheduled amount", _money(database.month_summary(year, month).remaining_cents)),
+    ]
+    for row_index, (name, value) in enumerate(metrics, start=3):
+        summary.cell(row=row_index, column=1, value=name)
+        summary.cell(row=row_index, column=2, value=value)
+        if isinstance(value, float):
+            summary.cell(row=row_index, column=2).number_format = (
+                '$#,##0.00;[Red]-$#,##0.00'
+            )
+    _autowidth(summary)
+
+    bills = wb.create_sheet("Bills to Review")
+    _financial_title(bills, "Bills to Review", label, header_row=4)
+    headers = [
+        "Cycle", "Bill", "Due", "Paid", "Remaining", "Status",
+        "Bank Verified", "Payment Account", "Reason",
+    ]
+    for col, value in enumerate(headers, start=1):
+        bills.cell(row=4, column=col, value=value)
+    for values in bill_rows:
+        bills.append(values)
+    _finalize_financial_sheet(
+        bills,
+        header_row=4,
+        currency_columns=(3, 4, 5),
+    )
+
+    tx = wb.create_sheet("Unresolved Transactions")
+    _financial_title(tx, "Unresolved Transactions", label, header_row=4)
+    headers = ["Date", "Merchant / Description", "Account", "Amount", "Flow"]
+    for col, value in enumerate(headers, start=1):
+        tx.cell(row=4, column=col, value=value)
+    for values in transaction_rows:
+        tx.append(values)
+    _finalize_financial_sheet(
+        tx,
+        header_row=4,
+        currency_columns=(4,),
+    )
+    return wb
+
+
+def _build_payment_variance_report(
+    database: Database,
+    year: int,
+    month: int,
+) -> Workbook:
+    del month
+    aggregates: dict[str, dict[str, Any]] = {}
+    for selected_month in range(1, 13):
+        for row in database.list_month_instances(year, selected_month):
+            name = str(row["bill_name_snapshot"])
+            key = name.casefold()
+            item = aggregates.setdefault(
+                key,
+                {
+                    "name": name,
+                    "count": 0,
+                    "due": 0,
+                    "paid": 0,
+                    "verified": 0,
+                },
+            )
+            item["count"] += 1
+            item["due"] += int(row["due_cents"] or 0)
+            item["paid"] += int(row["paid_cents"] or 0)
+            item["verified"] += int(bool(row["bank_verified"]))
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Payment Variance"
+    _financial_title(
+        ws,
+        "Payment Variance",
+        f"{year} · scheduled amounts compared with recorded payments",
+        header_row=4,
+    )
+    headers = [
+        "Bill", "Occurrences", "Scheduled", "Paid", "Difference",
+        "Average Scheduled", "Average Paid", "Bank Verified",
+    ]
+    for col, value in enumerate(headers, start=1):
+        ws.cell(row=4, column=col, value=value)
+
+    rows = sorted(
+        aggregates.values(),
+        key=lambda item: (-abs(int(item["paid"]) - int(item["due"])), str(item["name"]).casefold()),
+    )
+    for item in rows:
+        count = int(item["count"]) or 1
+        ws.append([
+            item["name"],
+            item["count"],
+            _money(int(item["due"])),
+            _money(int(item["paid"])),
+            _money(int(item["paid"]) - int(item["due"])),
+            _money(round(int(item["due"]) / count)),
+            _money(round(int(item["paid"]) / count)),
+            item["verified"],
+        ])
+    _finalize_financial_sheet(
+        ws,
+        header_row=4,
+        currency_columns=(3, 4, 5, 6, 7),
+    )
+    return wb
+
+
+def _build_account_cash_flow_report(
+    database: Database,
+    year: int,
+    month: int,
+) -> Workbook:
+    environment = _report_environment(database)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Account Cash Flow"
+    label = f"{MONTH_NAMES[month - 1]} {year}"
+    _financial_title(
+        ws,
+        "Account Cash Flow",
+        f"{label} · posted transaction inflows and outflows",
+        header_row=4,
+    )
+    headers = [
+        "Account", "Inflows", "Outflows", "Net Cash Flow",
+        "Transactions", "Current Balance", "Available Balance",
+    ]
+    for col, value in enumerate(headers, start=1):
+        ws.cell(row=4, column=col, value=value)
+
+    totals: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"in": 0, "out": 0, "count": 0}
+    )
+    if environment is not None:
+        for row in database.list_bank_transactions(
+            environment,
+            limit=10000,
+            year=year,
+            month=month,
+        ):
+            if bool(row["pending"]):
+                continue
+            label_key = _transaction_account_label(row)
+            amount = int(row["amount_cents"] or 0)
+            totals[label_key]["count"] += 1
+            if amount >= 0:
+                totals[label_key]["out"] += amount
+            else:
+                totals[label_key]["in"] += -amount
+
+        balances = {
+            (
+                str(row["name"] or "(unnamed account)")
+                + (f" ••••{row['mask']}" if row["mask"] else "")
+            ): row
+            for row in database.list_bank_accounts(environment)
+        }
+        for account_name in sorted(
+            set(totals) | set(balances),
+            key=str.casefold,
+        ):
+            flow = totals.get(account_name, {"in": 0, "out": 0, "count": 0})
+            account = balances.get(account_name)
+            current = (
+                None
+                if account is None or account["current_balance_cents"] is None
+                else int(account["current_balance_cents"])
+            )
+            available = (
+                None
+                if account is None or account["available_balance_cents"] is None
+                else int(account["available_balance_cents"])
+            )
+            ws.append([
+                account_name,
+                _money(flow["in"]),
+                _money(flow["out"]),
+                _money(flow["in"] - flow["out"]),
+                flow["count"],
+                _money(current),
+                _money(available),
+            ])
+
+    _finalize_financial_sheet(
+        ws,
+        header_row=4,
+        currency_columns=(2, 3, 4, 6, 7),
+    )
+    return wb
+
+
+def _build_annual_bill_summary_report(
+    database: Database,
+    year: int,
+    month: int,
+) -> Workbook:
+    del month
+    wb = Workbook()
+    monthly = wb.active
+    monthly.title = "Monthly Summary"
+    _financial_title(
+        monthly,
+        "Annual Bill Summary",
+        str(year),
+        header_row=4,
+    )
+    headers = [
+        "Month", "Scheduled", "Paid", "Remaining", "Bill Rows", "Paid Rows",
+    ]
+    for col, value in enumerate(headers, start=1):
+        monthly.cell(row=4, column=col, value=value)
+    for selected_month in range(1, 13):
+        summary = database.month_summary(year, selected_month)
+        monthly.append([
+            MONTH_NAMES[selected_month - 1],
+            _money(summary.due_cents),
+            _money(summary.paid_cents),
+            _money(summary.remaining_cents),
+            summary.bill_count,
+            summary.paid_count,
+        ])
+    _finalize_financial_sheet(
+        monthly,
+        header_row=4,
+        currency_columns=(2, 3, 4),
+    )
+
+    by_bill = wb.create_sheet("By Bill")
+    _financial_title(by_bill, "Annual Totals by Bill", str(year), header_row=4)
+    bill_headers = [
+        "Bill", "Occurrences", "Scheduled", "Paid", "Remaining",
+        "Average Scheduled",
+    ]
+    for col, value in enumerate(bill_headers, start=1):
+        by_bill.cell(row=4, column=col, value=value)
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for selected_month in range(1, 13):
+        for row in database.list_month_instances(year, selected_month):
+            name = str(row["bill_name_snapshot"])
+            item = grouped.setdefault(
+                name.casefold(),
+                {"name": name, "count": 0, "due": 0, "paid": 0},
+            )
+            item["count"] += 1
+            item["due"] += int(row["due_cents"] or 0)
+            item["paid"] += int(row["paid_cents"] or 0)
+    for item in sorted(
+        grouped.values(),
+        key=lambda item: (-int(item["due"]), str(item["name"]).casefold()),
+    ):
+        count = int(item["count"]) or 1
+        due = int(item["due"])
+        paid = int(item["paid"])
+        by_bill.append([
+            item["name"],
+            item["count"],
+            _money(due),
+            _money(paid),
+            _money(max(due - paid, 0)),
+            _money(round(due / count)),
+        ])
+    _finalize_financial_sheet(
+        by_bill,
+        header_row=4,
+        currency_columns=(3, 4, 5, 6),
+    )
+    return wb
+
+
+def _build_bill_cost_changes_report(
+    database: Database,
+    year: int,
+    month: int,
+) -> Workbook:
+    observations: dict[str, list[tuple[int, int, int]]] = defaultdict(list)
+    for selected_year, selected_month in _month_sequence_ending(year, month, 12):
+        for row in database.list_month_instances(selected_year, selected_month):
+            name = str(row["bill_name_snapshot"])
+            observations[name.casefold()].append(
+                (
+                    selected_year,
+                    selected_month,
+                    int(row["due_cents"] or 0),
+                )
+            )
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Bill Cost Changes"
+    _financial_title(
+        ws,
+        "Bill Cost Changes",
+        f"12 months ending {MONTH_NAMES[month - 1]} {year}",
+        header_row=4,
+    )
+    headers = [
+        "Bill", "Occurrences", "Earliest Amount", "Latest Amount",
+        "Change", "Change %", "Minimum", "Maximum", "Average",
+    ]
+    for col, value in enumerate(headers, start=1):
+        ws.cell(row=4, column=col, value=value)
+
+    rows: list[list[Any]] = []
+    for values in observations.values():
+        ordered = sorted(values)
+        due_values = [value[2] for value in ordered]
+        if not due_values:
+            continue
+        earliest = due_values[0]
+        latest = due_values[-1]
+        change = latest - earliest
+        change_pct = None if earliest == 0 else change / earliest
+        rows.append([
+            None,
+            len(due_values),
+            _money(earliest),
+            _money(latest),
+            _money(change),
+            change_pct,
+            _money(min(due_values)),
+            _money(max(due_values)),
+            _money(round(sum(due_values) / len(due_values))),
+        ])
+    # Attach names separately to preserve display capitalization.
+    name_map = {
+        key: str(
+            next(
+                row["bill_name_snapshot"]
+                for y, m in _month_sequence_ending(year, month, 12)
+                for row in database.list_month_instances(y, m)
+                if str(row["bill_name_snapshot"]).casefold() == key
+            )
+        )
+        for key in observations
+    }
+    combined = []
+    for key, values in observations.items():
+        ordered = sorted(values)
+        due_values = [value[2] for value in ordered]
+        if not due_values:
+            continue
+        earliest = due_values[0]
+        latest = due_values[-1]
+        change = latest - earliest
+        change_pct = None if earliest == 0 else change / earliest
+        combined.append([
+            name_map[key],
+            len(due_values),
+            _money(earliest),
+            _money(latest),
+            _money(change),
+            change_pct,
+            _money(min(due_values)),
+            _money(max(due_values)),
+            _money(round(sum(due_values) / len(due_values))),
+        ])
+    combined.sort(
+        key=lambda row: (
+            -abs(float(row[4] or 0)),
+            str(row[0]).casefold(),
+        )
+    )
+    for values in combined:
+        ws.append(values)
+    _finalize_financial_sheet(
+        ws,
+        header_row=4,
+        currency_columns=(3, 4, 5, 7, 8, 9),
+    )
+    for row in range(5, ws.max_row + 1):
+        ws.cell(row=row, column=6).number_format = "0.0%"
+    return wb
+
+
+_FINANCIAL_REPORT_BUILDERS = {
+    "funding_plan": _build_funding_report,
+    "merchant_spending": _build_merchant_spending_report,
+    "bill_trend_12m": _build_bill_trend_report,
+    "needs_attention": _build_needs_attention_report,
+    "payment_variance": _build_payment_variance_report,
+    "account_cash_flow": _build_account_cash_flow_report,
+    "annual_bill_summary": _build_annual_bill_summary_report,
+    "bill_cost_changes": _build_bill_cost_changes_report,
+}
+
+
+def export_financial_report(
+    database: Database,
+    year: int,
+    month: int,
+    report_key: str,
+    *,
+    output_dir: Path | str | None = None,
+) -> ExportResult:
+    key = str(report_key).strip().casefold()
+    builder = _FINANCIAL_REPORT_BUILDERS.get(key)
+    if builder is None:
+        raise ValueError(f"Unsupported financial report: {report_key}")
+
+    destination = (
+        Path(output_dir)
+        if output_dir is not None
+        else default_reports_dir(database)
+    )
+    destination.mkdir(parents=True, exist_ok=True)
+    path = destination / f"{_financial_stem(key, year, month)}.xlsx"
+    workbook = builder(database, int(year), int(month))
+    workbook.save(path)
+    return ExportResult(paths=(path,))
