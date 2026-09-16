@@ -1493,11 +1493,15 @@ def _build_bill_cost_changes_report(
     year: int,
     month: int,
 ) -> Workbook:
-    observations: dict[str, list[tuple[int, int, int]]] = defaultdict(list)
+    observations: dict[str, dict[str, Any]] = {}
     for selected_year, selected_month in _month_sequence_ending(year, month, 12):
         for row in database.list_month_instances(selected_year, selected_month):
             name = str(row["bill_name_snapshot"])
-            observations[name.casefold()].append(
+            item = observations.setdefault(
+                name.casefold(),
+                {"name": name, "values": []},
+            )
+            item["values"].append(
                 (
                     selected_year,
                     selected_month,
@@ -1521,42 +1525,9 @@ def _build_bill_cost_changes_report(
     for col, value in enumerate(headers, start=1):
         ws.cell(row=4, column=col, value=value)
 
-    rows: list[list[Any]] = []
-    for values in observations.values():
-        ordered = sorted(values)
-        due_values = [value[2] for value in ordered]
-        if not due_values:
-            continue
-        earliest = due_values[0]
-        latest = due_values[-1]
-        change = latest - earliest
-        change_pct = None if earliest == 0 else change / earliest
-        rows.append([
-            None,
-            len(due_values),
-            _money(earliest),
-            _money(latest),
-            _money(change),
-            change_pct,
-            _money(min(due_values)),
-            _money(max(due_values)),
-            _money(round(sum(due_values) / len(due_values))),
-        ])
-    # Attach names separately to preserve display capitalization.
-    name_map = {
-        key: str(
-            next(
-                row["bill_name_snapshot"]
-                for y, m in _month_sequence_ending(year, month, 12)
-                for row in database.list_month_instances(y, m)
-                if str(row["bill_name_snapshot"]).casefold() == key
-            )
-        )
-        for key in observations
-    }
-    combined = []
-    for key, values in observations.items():
-        ordered = sorted(values)
+    combined: list[list[Any]] = []
+    for item in observations.values():
+        ordered = sorted(item["values"])
         due_values = [value[2] for value in ordered]
         if not due_values:
             continue
@@ -1565,7 +1536,7 @@ def _build_bill_cost_changes_report(
         change = latest - earliest
         change_pct = None if earliest == 0 else change / earliest
         combined.append([
-            name_map[key],
+            item["name"],
             len(due_values),
             _money(earliest),
             _money(latest),
@@ -1575,6 +1546,7 @@ def _build_bill_cost_changes_report(
             _money(max(due_values)),
             _money(round(sum(due_values) / len(due_values))),
         ])
+
     combined.sort(
         key=lambda row: (
             -abs(float(row[4] or 0)),
