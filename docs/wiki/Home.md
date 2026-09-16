@@ -22,6 +22,8 @@ Bi-Weekly Bills does **not** initiate transfers or bill payments. It calculates 
 
 **Bi-Weekly Bills 1.0** is a PySide6 + SQLite desktop application that can synchronize balances and transactions through Plaid, track recurring bills, reconcile outgoing payments, plan Bills Checking funding, and export monthly reports.
 
+**What is Plaid?** Plaid is a third-party financial-data service that securely connects supported bank accounts to applications like Bi-Weekly Bills. It supplies account, balance, and transaction data to the app; your bank sign-in happens through Plaid rather than inside Bi-Weekly Bills.
+
 ## Start here
 
 1. [[Installation]]
