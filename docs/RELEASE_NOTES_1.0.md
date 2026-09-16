@@ -64,4 +64,4 @@ Transactions retain Plaid merchant/entity metadata and cache supported merchant 
 
 Start with [USER_GUIDE.md](USER_GUIDE.md).
 
-The repository’s GitHub Wiki feature is disabled, so the authoritative user documentation ships in the repository under `docs/`. Technical and QA documentation remains available alongside the user guide.
+The repository Wiki is enabled and provides a user-friendly documentation layer synchronized from `docs/wiki/`. The version-controlled technical source remains under `docs/`, including the full user guide and QA/implementation documentation.
