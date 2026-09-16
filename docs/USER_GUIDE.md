@@ -206,16 +206,35 @@ Historical re-scans operate on already stored transactions; they do not create a
 
 ## 8. Reports
 
-Open **Reports**, select a month/year, then choose:
+Open **Reports** and select the month/year you want to work with.
 
-- **Export Excel**
-- **Export PDF**
-- **Export ODS**
-- **Export all**
+### Full monthly exports
 
-The spreadsheet formats contain Summary, Bills, Funding, Transactions, and Accounts sections. Reports are read-only exports and do not modify SQLite.
+Use **Export Excel**, **Export PDF**, **Export ODS**, or **Export all** for the complete monthly package.
 
-By default reports are written under:
+### Quick reports
+
+Four focused reports are available as direct buttons:
+
+- **Bills Funding** — selected-month Bills Checking funding and included bills.
+- **Spending by Merchant** — selected-month posted spending grouped by merchant.
+- **12-Month Bill Trend** — trailing 12-month scheduled/paid/funding trend.
+- **Needs Attention** — unpaid or unverified bills, missing setup, and unresolved posted bank activity.
+
+### Other Reports
+
+Use the **Other Reports** dropdown for:
+
+- **Payment Variance** — scheduled versus paid totals by bill for the selected year.
+- **Account Cash Flow** — selected-month inflows, outflows, and net movement by account.
+- **Annual Bill Summary** — selected-year monthly totals and totals by bill.
+- **Bill Cost Changes** — trailing 12-month changes in recurring bill amounts.
+
+Focused reports are Excel workbooks so you can sort and filter the results.
+
+Reports are read-only and do not modify SQLite.
+
+By default they are written under:
 
 ```text
 <database directory>/reports/
