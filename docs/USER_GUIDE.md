@@ -6,33 +6,54 @@ The application never sends a bank transfer or pays a bill. Any actual movement 
 
 ## 1. Install on Arch Linux
 
-Install Python and create a virtual environment:
+### Recommended: install the release wheel
+
+Install the required system packages:
 
 ```bash
-sudo pacman -S --needed python python-pip
+sudo pacman -S --needed python python-pip libglvnd libxkbcommon libxkbcommon-x11 libxcb fontconfig
+```
 
-git clone git@github.com:newnetmp3/Bi-Weekly-Bills.git
+Download the latest `.whl` file from the [GitHub Releases page](https://github.com/newnetmp3/Bi-Weekly-Bills/releases). For v1.0.0 the file is:
+
+```text
+bi_weekly_bills-1.0.0-py3-none-any.whl
+```
+
+Create a dedicated environment and install the downloaded wheel:
+
+```bash
+mkdir -p ~/.local/opt/bi-weekly-bills
+python -m venv ~/.local/opt/bi-weekly-bills
+~/.local/opt/bi-weekly-bills/bin/python -m pip install --upgrade pip
+~/.local/opt/bi-weekly-bills/bin/python -m pip install ~/Downloads/bi_weekly_bills-1.0.0-py3-none-any.whl
+```
+
+Launch the app:
+
+```bash
+~/.local/opt/bi-weekly-bills/bin/biweekly-bills-app
+```
+
+The first launch installs or refreshes the desktop launcher and icon. Future launches can normally be made from the desktop application menu.
+
+To update later, download the newer wheel and install it into the same environment with `pip install --upgrade`.
+
+### Alternate: install from a Git clone
+
+```bash
+sudo pacman -S --needed git python python-pip libglvnd libxkbcommon libxkbcommon-x11 libxcb fontconfig
+
+git clone https://github.com/newnetmp3/Bi-Weekly-Bills.git
 cd Bi-Weekly-Bills
 
 python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install .
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install .
+.venv/bin/biweekly-bills-app
 ```
 
-For a development checkout, use `pip install -e .` instead.
-
-Launch the desktop application:
-
-```bash
-biweekly-bills-app
-```
-
-The application installs/refreshes its Wayland-compatible desktop launcher and icon automatically. You can also refresh them manually with:
-
-```bash
-biweekly-bills install-desktop
-```
+For normal users, `git clone` is only a way to download the application. No commits, pushes, branches, or other Git workflow are required.
 
 ## 2. First run and bank connection
 
