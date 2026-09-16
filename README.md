@@ -21,7 +21,7 @@ This project is deliberately designed around Plaid's Trial-plan rules:
 - A Trial team can create at most 10 Production Items.
 - Deleting an Item does **not** restore the slot.
 - Every Production access token created counts against the lifetime Trial Item limit.
-- The Navy Federal access token must therefore be persisted and never casually discarded.
+- The Production access token must therefore be persisted and never casually discarded.
 - Routine use is limited to Trial-supported **Transactions** and **Balance**.
 - The program never initiates transfers or payments.
 
@@ -52,7 +52,7 @@ That file contains no credential. Commit it to the private repository so a fresh
 
 ## Safety rules
 
-1. Link Navy Federal **once** in Production.
+1. Link the financial institution **once** in Production.
 2. If a persisted credential already exists, initial Link refuses to run again.
 3. If `PRODUCTION_ITEM_CREATED.lock` exists but the local credential is missing, Link refuses to run. Recover the existing credential instead of creating another Item.
 4. Before opening Link, the program verifies that the secure credential directory is writable.
@@ -175,8 +175,7 @@ See `docs/UI_RESPONSIVENESS_QA.md` for the interaction-validation pass.
 Paid bills are verified from the account that actually paid them. If a bill's
 Payment Account is Bills Checking, the outgoing Bills Checking transaction is
 eligible. If another checking account is selected as the Payment Account, that
-account is used instead. The rule is generic for all bills; there is no
-Star-Card-specific exception.
+account is used instead. The rule is generic for all bills.
 
 A posted outgoing transaction with the recorded Paid amount can verify an
 already-Paid bill even when its bank description is generic. Wrong-account
@@ -235,7 +234,7 @@ biweekly-bills recover-production
 
 Never create another Production Item to recover from an interrupted token save.
 
-Before the **first and only** NFCU Production link, confirm:
+Before the **first and only** Production link, confirm:
 
 - no Production Item lock exists;
 - no Production Plaid credential already exists;
@@ -271,7 +270,7 @@ The lock file is safe to commit. The Plaid credential is not.
 biweekly-bills accounts
 ```
 
-This uses Plaid Balance and lists the linked NFCU accounts. Copy the `account_id` for the Bills Checking account:
+This uses Plaid Balance and lists the linked accounts. Copy the `account_id` for the Bills Checking account:
 
 ```bash
 biweekly-bills use-bills-account ACCOUNT_ID
@@ -363,7 +362,7 @@ If Setup cells are edited manually instead of through the GUI, use **SYNC CURREN
 
 ### Pre-Production workbook reliability
 
-The workbook theme now includes a reliability pass intended to run before real Navy Federal data is connected:
+The workbook theme now includes a reliability pass intended to run before real Production bank data is connected:
 
 - **Consistent number formats** — monthly money fields and Setup Latest Due use a consistent U.S. currency format; Debt Tracker uses header-driven currency / percentage formatting where applicable.
 - **Exception-only conditional formatting** — warning Status values (for example `SHORT`, `DUE`, `OVERDUE`, `NEEDS ACTION`) and negative Extra/(Short) values are highlighted. Normal/reconciled rows are not color-saturated.
@@ -436,13 +435,13 @@ The sync:
 - reads the Bills Checking Balance;
 - matches only known posted bill transactions;
 - proposes updates to the correct 1st/15th `Paid` cells;
-- fills the NFCU posted-balance reconciliation field;
+- fills the posted-balance reconciliation field;
 - preserves your planned bill amounts and transfer formulas;
 - backs up the workbook as a timestamped `.bak.ods` file before writing.
 
 ## Reauthentication
 
-If Plaid/NFCU later reports `ITEM_LOGIN_REQUIRED`, do **not** run initial Link again.
+If Plaid later reports `ITEM_LOGIN_REQUIRED`, do **not** run initial Link again.
 
 Use:
 
