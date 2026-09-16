@@ -21,9 +21,13 @@ from PySide6.QtWidgets import (
 from ..database import Database
 from ..reports import (
     ExportResult,
+    FINANCIAL_REPORT_LABELS,
     MONTH_NAMES,
+    OTHER_FINANCIAL_REPORTS,
+    QUICK_FINANCIAL_REPORTS,
     build_report_bundle,
     default_reports_dir,
+    export_financial_report,
     export_reports,
 )
 from .busy_cursor import begin_busy_cursor, end_busy_cursor
@@ -52,6 +56,7 @@ class _ReportWorker(QObject):
         month: int,
         formats: tuple[str, ...],
         output_dir: Path,
+        report_key: str | None = None,
     ):
         super().__init__()
         self.database = database
@@ -59,17 +64,27 @@ class _ReportWorker(QObject):
         self.month = month
         self.formats = formats
         self.output_dir = output_dir
+        self.report_key = report_key
 
     @Slot()
     def run(self) -> None:
         try:
-            result = export_reports(
-                self.database,
-                self.year,
-                self.month,
-                formats=self.formats,
-                output_dir=self.output_dir,
-            )
+            if self.report_key is not None:
+                result = export_financial_report(
+                    self.database,
+                    self.year,
+                    self.month,
+                    self.report_key,
+                    output_dir=self.output_dir,
+                )
+            else:
+                result = export_reports(
+                    self.database,
+                    self.year,
+                    self.month,
+                    formats=self.formats,
+                    output_dir=self.output_dir,
+                )
             self.finished.emit(result)
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -148,6 +163,53 @@ class ReportsPage(QWidget):
         cards.addWidget(self.remaining_card)
         cards.addWidget(self.bank_card)
         root.addLayout(cards)
+
+        financial_card = QFrame()
+        financial_card.setObjectName("Card")
+        financial_layout = QVBoxLayout(financial_card)
+        financial_layout.setContentsMargins(16, 14, 16, 14)
+        financial_layout.setSpacing(10)
+
+        financial_header = QHBoxLayout()
+        financial_title = QLabel("Financial reports")
+        financial_title.setObjectName("SectionTitle")
+        financial_help = QLabel(
+            "Quick reports create focused Excel workbooks for the selected period."
+        )
+        financial_help.setObjectName("Muted")
+        financial_header.addWidget(financial_title)
+        financial_header.addStretch(1)
+        financial_header.addWidget(financial_help)
+        financial_layout.addLayout(financial_header)
+
+        quick_row = QHBoxLayout()
+        quick_row.setSpacing(8)
+        self.quick_report_buttons: dict[str, QPushButton] = {}
+        for report_key, label in QUICK_FINANCIAL_REPORTS:
+            button = QPushButton(label)
+            button.setObjectName("SecondaryButton")
+            button.clicked.connect(
+                lambda checked=False, key=report_key:
+                    self._start_financial_report(key)
+            )
+            self.quick_report_buttons[report_key] = button
+            quick_row.addWidget(button)
+
+        quick_row.addStretch(1)
+        quick_row.addWidget(QLabel("Other Reports"))
+        self.other_reports = QComboBox()
+        for report_key, label in OTHER_FINANCIAL_REPORTS:
+            self.other_reports.addItem(label, report_key)
+        quick_row.addWidget(self.other_reports)
+
+        self.run_other_report_button = QPushButton("Run report")
+        self.run_other_report_button.setObjectName("SecondaryButton")
+        self.run_other_report_button.clicked.connect(
+            self._run_selected_other_report
+        )
+        quick_row.addWidget(self.run_other_report_button)
+        financial_layout.addLayout(quick_row)
+        root.addWidget(financial_card)
 
         report_card = QFrame()
         report_card.setObjectName("Card")
@@ -371,18 +433,46 @@ class ReportsPage(QWidget):
             self.pdf_button,
             self.ods_button,
             self.all_button,
+            *self.quick_report_buttons.values(),
+            self.run_other_report_button,
         ):
             button.setEnabled(enabled)
+        self.other_reports.setEnabled(enabled)
 
     def _start_export(self, formats: tuple[str, ...]) -> None:
+        label = ", ".join(fmt.upper() for fmt in formats)
+        self._launch_report_worker(
+            formats=formats,
+            report_key=None,
+            status_text=f"Generating {label} report…",
+        )
+
+    def _start_financial_report(self, report_key: str) -> None:
+        label = FINANCIAL_REPORT_LABELS.get(report_key, report_key)
+        self._launch_report_worker(
+            formats=(),
+            report_key=report_key,
+            status_text=f"Generating {label} Excel report…",
+        )
+
+    def _run_selected_other_report(self) -> None:
+        report_key = self.other_reports.currentData()
+        if report_key:
+            self._start_financial_report(str(report_key))
+
+    def _launch_report_worker(
+        self,
+        *,
+        formats: tuple[str, ...],
+        report_key: str | None,
+        status_text: str,
+    ) -> None:
         if self._thread is not None and self._thread.isRunning():
             return
 
         year, month = self._selected_period()
         self._set_export_enabled(False)
-        self.status.setText(
-            "Generating " + ", ".join(fmt.upper() for fmt in formats) + " report…"
-        )
+        self.status.setText(status_text)
 
         if not self._busy_cursor_active:
             begin_busy_cursor()
@@ -395,6 +485,7 @@ class ReportsPage(QWidget):
             month,
             formats,
             self.output_dir,
+            report_key=report_key,
         )
         worker.moveToThread(thread)
 
