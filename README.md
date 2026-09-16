@@ -17,6 +17,8 @@ Bi-Weekly Bills never moves the money itself. It tells you what should be funded
 
 The desktop application is built with PySide6 + SQLite and can synchronize balances and transactions through Plaid, reconcile payments, plan Bills Checking funding, and export monthly reports.
 
+**What is Plaid?** Plaid is a third-party financial-data service that securely connects supported bank accounts to applications like Bi-Weekly Bills. It provides account, balance, and transaction data to the app; your bank sign-in happens through Plaid rather than inside Bi-Weekly Bills.
+
 ## Version 1.0
 
 Version 1.0 makes the desktop application the primary interface and SQLite the source of truth. The legacy ODS/LibreOffice workflow remains available for migration and maintenance, but normal day-to-day use should begin with the desktop app.
