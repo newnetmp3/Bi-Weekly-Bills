@@ -8,7 +8,13 @@ import zipfile
 from openpyxl import load_workbook
 
 from biweekly_bills.database import Database
-from biweekly_bills.reports import build_report_bundle, export_reports
+from biweekly_bills.reports import (
+    OTHER_FINANCIAL_REPORTS,
+    QUICK_FINANCIAL_REPORTS,
+    build_report_bundle,
+    export_financial_report,
+    export_reports,
+)
 
 
 class ReportExportTests(unittest.TestCase):
@@ -205,6 +211,47 @@ class ReportExportTests(unittest.TestCase):
         self.assertEqual(len(bundle.funding_items), 1)
         self.assertEqual(bundle.funding_items[0].bill_name, "Cox")
         self.assertEqual(bundle.funding_items[0].remaining_cents, 12060)
+
+    def test_financial_report_catalog_exports_readable_workbooks(self):
+        root, db = self._fixture()
+        output = root / "financial-reports"
+
+        report_keys = [
+            key
+            for key, _label in (
+                QUICK_FINANCIAL_REPORTS + OTHER_FINANCIAL_REPORTS
+            )
+        ]
+        self.assertEqual(len(report_keys), 8)
+
+        with patch(
+            "biweekly_bills.reports.load_settings",
+            return_value=SimpleNamespace(environment="sandbox"),
+        ):
+            for report_key in report_keys:
+                with self.subTest(report_key=report_key):
+                    result = export_financial_report(
+                        db,
+                        2026,
+                        9,
+                        report_key,
+                        output_dir=output,
+                    )
+                    self.assertEqual(len(result.paths), 1)
+                    path = result.paths[0]
+                    self.assertEqual(path.suffix, ".xlsx")
+                    self.assertTrue(path.exists())
+                    self.assertGreater(path.stat().st_size, 100)
+
+                    workbook = load_workbook(path, data_only=False)
+                    self.assertTrue(workbook.sheetnames)
+                    self.assertTrue(
+                        any(
+                            cell.value is not None
+                            for row in workbook.active.iter_rows()
+                            for cell in row
+                        )
+                    )
 
     def test_production_mode_never_falls_back_to_sandbox_bank_data(self):
         _, db = self._fixture()
