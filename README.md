@@ -46,41 +46,87 @@ Plaid provides the app with account, balance, and transaction data. Your bank si
 
 You will need your own Plaid Client ID and Secret to connect live bank data.
 
-## Quick setup on Arch Linux
+## Install on Arch Linux
 
-### 1. Install Python
+The easiest way to install Bi-Weekly Bills is from the **Python wheel (`.whl`)** attached to each GitHub Release. A Git clone install is also available if you prefer to install directly from the repository.
+
+### Recommended: install the release wheel
+
+#### 1. Install the required system packages
 
 ```bash
-sudo pacman -S --needed python python-pip
+sudo pacman -S --needed python python-pip libglvnd libxkbcommon libxkbcommon-x11 libxcb fontconfig
 ```
 
-### 2. Download Bi-Weekly Bills
+#### 2. Download Bi-Weekly Bills
 
-Use Git once to download the app:
+Open the **[GitHub Releases page](https://github.com/newnetmp3/Bi-Weekly-Bills/releases)**, open the latest release, and download the file ending in:
+
+```text
+-py3-none-any.whl
+```
+
+For v1.0.0, the filename is:
+
+```text
+bi_weekly_bills-1.0.0-py3-none-any.whl
+```
+
+Your browser will normally save it in `~/Downloads`.
+
+#### 3. Create a private Python environment for the app
 
 ```bash
+mkdir -p ~/.local/opt/bi-weekly-bills
+python -m venv ~/.local/opt/bi-weekly-bills
+~/.local/opt/bi-weekly-bills/bin/python -m pip install --upgrade pip
+```
+
+#### 4. Install the wheel
+
+For v1.0.0:
+
+```bash
+~/.local/opt/bi-weekly-bills/bin/python -m pip install ~/Downloads/bi_weekly_bills-1.0.0-py3-none-any.whl
+```
+
+If you downloaded a newer release, use that wheel's filename instead.
+
+#### 5. Run Bi-Weekly Bills
+
+```bash
+~/.local/opt/bi-weekly-bills/bin/biweekly-bills-app
+```
+
+On first launch, Bi-Weekly Bills installs or refreshes its desktop launcher and icon. After that, you can normally start **Bi-Weekly Bills** from your desktop environment's application menu.
+
+#### Updating a wheel installation
+
+Download the newer wheel from Releases and install it into the same app environment:
+
+```bash
+~/.local/opt/bi-weekly-bills/bin/python -m pip install --upgrade ~/Downloads/bi_weekly_bills-X.Y.Z-py3-none-any.whl
+```
+
+Replace `X.Y.Z` with the version you downloaded.
+
+### Alternate: install with Git clone
+
+If you prefer to download the repository itself:
+
+```bash
+sudo pacman -S --needed git python python-pip libglvnd libxkbcommon libxkbcommon-x11 libxcb fontconfig
+
 git clone https://github.com/newnetmp3/Bi-Weekly-Bills.git
 cd Bi-Weekly-Bills
-```
 
-**That is the only Git command a normal user should need.** You do not need to make commits, create branches, push changes, or manage the repository to use Bi-Weekly Bills.
-
-### 3. Create a virtual environment and install the app
-
-```bash
 python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install .
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install .
+.venv/bin/biweekly-bills-app
 ```
 
-### 4. Start the app
-
-```bash
-biweekly-bills-app
-```
-
-The app automatically installs or refreshes its desktop launcher and icon for the current user.
+For normal use, **`git clone` is the only Git command you need**. You do not need to commit, push, create branches, or manage the repository.
 
 ## First-time setup
 
