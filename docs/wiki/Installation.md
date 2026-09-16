@@ -4,7 +4,7 @@
 
 The current desktop workflow is developed and validated on **Arch Linux**. The app uses PySide6 and includes Wayland-compatible launcher/icon integration.
 
-## Install from a Git checkout
+## Download and install
 
 ```bash
 sudo pacman -S --needed python python-pip
@@ -18,11 +18,7 @@ python -m pip install --upgrade pip
 pip install .
 ```
 
-For a development checkout:
-
-```bash
-pip install -e .
-```
+The `git clone` command is only used to download Bi-Weekly Bills. Normal users do not need to commit, push, pull, create branches, or otherwise manage Git.
 
 ## Launch
 
