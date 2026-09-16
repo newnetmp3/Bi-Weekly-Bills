@@ -56,10 +56,14 @@ sudo pacman -S --needed python python-pip
 
 ### 2. Download Bi-Weekly Bills
 
+Use Git once to download the app:
+
 ```bash
 git clone https://github.com/newnetmp3/Bi-Weekly-Bills.git
 cd Bi-Weekly-Bills
 ```
+
+**That is the only Git command a normal user should need.** You do not need to make commits, create branches, push changes, or manage the repository to use Bi-Weekly Bills.
 
 ### 3. Create a virtual environment and install the app
 
@@ -120,7 +124,7 @@ Private Plaid configuration and credentials are stored separately under:
 ~/.config/bi-weekly-bills/
 ```
 
-Do not commit personal databases, reports, account information, or Plaid credentials to Git.
+Do not upload or share personal databases, reports, account information, or Plaid credentials.
 
 ## Documentation
 
