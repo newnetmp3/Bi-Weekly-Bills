@@ -1,0 +1,38 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Local Plaid state / downloaded financial data
+data/*.json
+!data/.gitkeep
+
+# Local desktop database and SQLite sidecars
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+
+# Local generated backups and financial report exports
+/backups/
+/reports/
+data/backups/
+data/reports/
+
+# Personal ODS bill workbook stays local by default
+workbook/*.ods
+!workbook/.gitkeep
+
+# LibreOffice temporary lock files
+.~lock.*.ods#
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Local Production Plaid safety locks
+PRODUCTION_ITEM_CREATED.lock
+PRODUCTION_LINK_IN_PROGRESS.lock

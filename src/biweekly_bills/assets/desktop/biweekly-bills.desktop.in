@@ -1,0 +1,15 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Bi-Weekly Bills
+GenericName=Bill Manager
+Comment=Manage household bills on a 1st and 15th cycle
+Exec=@EXEC@
+TryExec=@TRYEXEC@
+Icon=biweekly-bills
+Terminal=false
+Categories=Office;Finance;
+StartupNotify=true
+StartupWMClass=biweekly-bills
+DBusActivatable=false
+X-GNOME-SingleWindow=true

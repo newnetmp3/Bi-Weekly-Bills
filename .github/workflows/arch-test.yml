@@ -1,0 +1,39 @@
+name: arch-tests
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/arch-ci-trigger"
+
+jobs:
+  arch-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run test suite in Arch Linux
+        shell: bash
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -w /workspace \
+            archlinux:base \
+            bash -lc '
+              set -euo pipefail
+              pacman -Syu --noconfirm python python-pip libglvnd libxkbcommon libxkbcommon-x11 libxcb fontconfig
+              python -m venv /tmp/biweekly-bills-venv
+              /tmp/biweekly-bills-venv/bin/python -m pip install --upgrade pip
+              /tmp/biweekly-bills-venv/bin/pip install -e .
+              /tmp/biweekly-bills-venv/bin/python -m unittest discover -s tests -v
+              /tmp/biweekly-bills-venv/bin/biweekly-bills --help >/dev/null
+              /tmp/biweekly-bills-venv/bin/biweekly-bills-app --help >/dev/null
+
+              export XDG_DATA_HOME=/tmp/biweekly-bills-xdg
+              /tmp/biweekly-bills-venv/bin/biweekly-bills install-desktop
+              test -f "$XDG_DATA_HOME/applications/biweekly-bills.desktop"
+              test -f "$XDG_DATA_HOME/icons/hicolor/scalable/apps/biweekly-bills.svg"
+              grep -q "Icon=biweekly-bills" "$XDG_DATA_HOME/applications/biweekly-bills.desktop"
+
+              QT_QPA_PLATFORM=offscreen /tmp/biweekly-bills-venv/bin/python -c "from PySide6.QtWidgets import QApplication; from biweekly_bills.branding import application_icon, brand_logo_pixmap; app = QApplication([]); assert not application_icon().isNull(); assert not brand_logo_pixmap().isNull()"
+            '
