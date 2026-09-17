@@ -9,6 +9,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -43,6 +44,36 @@ from .table_sort import (
     end_table_refresh,
     set_sortable,
 )
+
+
+_REPORT_TOOLTIPS = {
+    "funding_plan": (
+        "Shows how much should be available in Bills Checking and which bills make up "
+        "the funding requirement."
+    ),
+    "merchant_spending": (
+        "Summarizes posted spending by merchant for the selected month."
+    ),
+    "bill_trend_12m": (
+        "Shows scheduled and paid bill totals across the 12 months ending with the "
+        "selected month."
+    ),
+    "needs_attention": (
+        "Lists bills and bank activity that still need review or follow-up."
+    ),
+    "payment_variance": (
+        "Compares expected bill amounts with recorded payments and highlights differences."
+    ),
+    "account_cash_flow": (
+        "Summarizes money moving in and out of each connected account."
+    ),
+    "annual_bill_summary": (
+        "Summarizes scheduled and paid bill totals for the selected year."
+    ),
+    "bill_cost_changes": (
+        "Highlights recurring bills whose typical cost has changed over time."
+    ),
+}
 
 
 class _ReportWorker(QObject):
@@ -174,41 +205,43 @@ class ReportsPage(QWidget):
         financial_title = QLabel("Financial reports")
         financial_title.setObjectName("SectionTitle")
         financial_help = QLabel(
-            "Quick reports create focused Excel workbooks for the selected period."
+            "Choose a report. Each button creates a focused Excel workbook for the "
+            "selected period."
         )
         financial_help.setObjectName("Muted")
+        financial_help.setWordWrap(True)
         financial_header.addWidget(financial_title)
         financial_header.addStretch(1)
         financial_header.addWidget(financial_help)
         financial_layout.addLayout(financial_header)
 
-        quick_row = QHBoxLayout()
-        quick_row.setSpacing(8)
+        report_grid = QGridLayout()
+        report_grid.setHorizontalSpacing(8)
+        report_grid.setVerticalSpacing(8)
+        self.financial_report_buttons: dict[str, QPushButton] = {}
         self.quick_report_buttons: dict[str, QPushButton] = {}
-        for report_key, label in QUICK_FINANCIAL_REPORTS:
+        self.other_report_buttons: dict[str, QPushButton] = {}
+        all_reports = QUICK_FINANCIAL_REPORTS + OTHER_FINANCIAL_REPORTS
+        quick_keys = {key for key, _label in QUICK_FINANCIAL_REPORTS}
+        for index, (report_key, label) in enumerate(all_reports):
             button = QPushButton(label)
             button.setObjectName("SecondaryButton")
+            button.setMinimumHeight(36)
+            button.setToolTip(_REPORT_TOOLTIPS.get(report_key, ""))
             button.clicked.connect(
-                lambda checked=False, key=report_key:
-                    self._start_financial_report(key)
+                lambda checked=False, key=report_key: self._start_financial_report(key)
             )
-            self.quick_report_buttons[report_key] = button
-            quick_row.addWidget(button)
+            self.financial_report_buttons[report_key] = button
+            if report_key in quick_keys:
+                self.quick_report_buttons[report_key] = button
+            else:
+                self.other_report_buttons[report_key] = button
+            row, column = divmod(index, 4)
+            report_grid.addWidget(button, row, column)
 
-        quick_row.addStretch(1)
-        quick_row.addWidget(QLabel("Other Reports"))
-        self.other_reports = QComboBox()
-        for report_key, label in OTHER_FINANCIAL_REPORTS:
-            self.other_reports.addItem(label, report_key)
-        quick_row.addWidget(self.other_reports)
-
-        self.run_other_report_button = QPushButton("Run report")
-        self.run_other_report_button.setObjectName("SecondaryButton")
-        self.run_other_report_button.clicked.connect(
-            self._run_selected_other_report
-        )
-        quick_row.addWidget(self.run_other_report_button)
-        financial_layout.addLayout(quick_row)
+        for column in range(4):
+            report_grid.setColumnStretch(column, 1)
+        financial_layout.addLayout(report_grid)
         root.addWidget(financial_card)
 
         report_card = QFrame()
@@ -304,26 +337,22 @@ class ReportsPage(QWidget):
         excel = menu.addAction("Export Excel")
         excel.setEnabled(self.xlsx_button.isEnabled())
         excel.triggered.connect(
-            lambda checked=False:
-                self._start_export(("xlsx",))
+            lambda checked=False: self._start_export(("xlsx",))
         )
         pdf = menu.addAction("Export PDF")
         pdf.setEnabled(self.pdf_button.isEnabled())
         pdf.triggered.connect(
-            lambda checked=False:
-                self._start_export(("pdf",))
+            lambda checked=False: self._start_export(("pdf",))
         )
         ods = menu.addAction("Export ODS")
         ods.setEnabled(self.ods_button.isEnabled())
         ods.triggered.connect(
-            lambda checked=False:
-                self._start_export(("ods",))
+            lambda checked=False: self._start_export(("ods",))
         )
         export_all = menu.addAction("Export all formats")
         export_all.setEnabled(self.all_button.isEnabled())
         export_all.triggered.connect(
-            lambda checked=False:
-                self._start_export(("xlsx", "pdf", "ods"))
+            lambda checked=False: self._start_export(("xlsx", "pdf", "ods"))
         )
 
         menu.addSeparator()
@@ -433,11 +462,9 @@ class ReportsPage(QWidget):
             self.pdf_button,
             self.ods_button,
             self.all_button,
-            *self.quick_report_buttons.values(),
-            self.run_other_report_button,
+            *self.financial_report_buttons.values(),
         ):
             button.setEnabled(enabled)
-        self.other_reports.setEnabled(enabled)
 
     def _start_export(self, formats: tuple[str, ...]) -> None:
         label = ", ".join(fmt.upper() for fmt in formats)
@@ -454,11 +481,6 @@ class ReportsPage(QWidget):
             report_key=report_key,
             status_text=f"Generating {label} Excel report…",
         )
-
-    def _run_selected_other_report(self) -> None:
-        report_key = self.other_reports.currentData()
-        if report_key:
-            self._start_financial_report(str(report_key))
 
     def _launch_report_worker(
         self,
