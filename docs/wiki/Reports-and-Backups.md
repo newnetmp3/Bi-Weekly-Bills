@@ -15,19 +15,14 @@ Choose a month/year, then use:
 
 These are the complete monthly reports and include the bill list, Bills Checking funding, bank transactions, reconciliation status, and account information.
 
-### Quick financial reports
+### Financial report buttons
 
-The most useful focused reports have their own buttons:
+All focused financial reports are shown directly as buttons on the Reports tab. There is no report dropdown.
 
 - **Bills Funding** — shows how much Bills Checking needs for the selected month, split between the 1st and 15th, plus every bill included in that funding amount.
 - **Spending by Merchant** — groups posted outflows for the selected month by merchant/description, showing total spent, transaction count, average purchase, largest purchase, and accounts used. Known funding/internal transfers are excluded.
 - **12-Month Bill Trend** — shows scheduled bills, recorded payments, remaining amounts, and Bills Checking funding for the trailing 12 months ending with the selected month. It also includes a scheduled-vs-paid trend chart.
 - **Needs Attention** — collects bills with money still due, paid items that are not bank-verified, missing Payment Accounts, unresolved posted transactions, and funding setup issues.
-
-### Other Reports
-
-The **Other Reports** dropdown contains less-frequent analysis:
-
 - **Payment Variance** — compares scheduled and recorded payment totals by bill for the selected year.
 - **Account Cash Flow** — summarizes posted inflows, outflows, and net cash flow for each connected account in the selected month.
 - **Annual Bill Summary** — provides month-by-month totals and annual totals by bill for the selected year.
