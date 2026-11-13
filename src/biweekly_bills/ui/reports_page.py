@@ -409,7 +409,7 @@ class ReportsPage(QWidget):
         self.paid_value.setText(money(bundle.month_summary.paid_cents))
         self.paid_detail.setText(
             f"{bundle.month_summary.paid_count} of {bundle.month_summary.bill_count} "
-            "bill rows have recorded payments"
+            "bills have a paid amount"
         )
         self.remaining_value.setText(money(bundle.month_summary.remaining_cents))
         if bundle.funding.environment is None:
@@ -423,8 +423,8 @@ class ReportsPage(QWidget):
 
         self.bank_value.setText(bundle.bank_label)
         self.bank_detail.setText(
-            f"{len(bundle.transactions)} transaction(s) · "
-            f"{bundle.matched_count} matched · {bundle.unresolved_count} unresolved"
+            f"{len(bundle.transactions)} bank transaction(s) this month · "
+            f"{bundle.matched_count} linked to bills"
         )
 
         self.preview_detail.setText(

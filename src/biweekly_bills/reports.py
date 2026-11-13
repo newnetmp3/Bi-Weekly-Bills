@@ -21,6 +21,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from .bill_status import bill_state_text
 from .database import Database, MonthSummary
 from .funding import FundingPlan, build_funding_plan, funding_lines
 from .settings import load_settings
@@ -177,7 +178,7 @@ def build_report_bundle(database: Database, year: int, month: int) -> ReportBund
                 paid_cents=paid,
                 remaining_cents=max(due - paid, 0),
                 method=row["method"],
-                status=row["status"],
+                status=bill_state_text(row),
                 payment_account=(
                     row["payment_account_snapshot"]
                     or _joined_bill_account_label(row, "payment_account")

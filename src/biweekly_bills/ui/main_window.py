@@ -4,9 +4,10 @@ from datetime import date
 from typing import Callable
 
 from PySide6.QtCore import QMimeData, QPoint, Qt, Signal
-from PySide6.QtGui import QDrag, QPainter
+from PySide6.QtGui import QColor, QDrag, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -826,7 +827,8 @@ class BillsPage(QWidget):
         root.setSpacing(16)
 
         intro = QLabel(
-            "Setup is now modeled as structured bill data. Edit here; historical bill instances stay intact."
+            "Your recurring bills. Changes apply to this and future months; "
+            "past months keep what was recorded."
         )
         intro.setObjectName("Muted")
         root.addWidget(intro)
@@ -837,18 +839,32 @@ class BillsPage(QWidget):
         list_card.setObjectName("Card")
         list_layout = QVBoxLayout(list_card)
         list_layout.setContentsMargins(16, 16, 16, 16)
-        title = QLabel("Master bill list")
+        list_header = QHBoxLayout()
+        title = QLabel("Your bills")
         title.setObjectName("SectionTitle")
-        list_layout.addWidget(title)
+        list_header.addWidget(title)
+        list_header.addStretch(1)
+        self.show_inactive = QCheckBox("Show inactive bills")
+        self.show_inactive.toggled.connect(self.refresh)
+        list_header.addWidget(self.show_inactive)
+        list_layout.addLayout(list_header)
 
-        self.bill_table = QTableWidget(0, 4)
-        self.bill_table.setHorizontalHeaderLabels(["Bill", "Cycle", "Method", "Active"])
+        self.setup_warning = QLabel("")
+        self.setup_warning.setWordWrap(True)
+        self.setup_warning.setStyleSheet("color: #ffd166;")
+        self.setup_warning.setVisible(False)
+        list_layout.addWidget(self.setup_warning)
+
+        self.bill_table = QTableWidget(0, 6)
+        self.bill_table.setHorizontalHeaderLabels(
+            ["Bill", "Pay period", "Amount", "Paid from", "Bills transfer", "Method"]
+        )
         self.bill_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.bill_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.bill_table.verticalHeader().setVisible(False)
         configure_resizable_columns(
             self.bill_table,
-            (280, 110, 170, 90),
+            (170, 90, 88, 150, 100, 82),
         )
         set_sortable(self.bill_table)
         self.bill_table.setContextMenuPolicy(
@@ -881,8 +897,8 @@ class BillsPage(QWidget):
         self.name = self._field(editor_layout, "Bill name")
         self.cycle = QComboBox()
         self.cycle.addItems(["1st", "15th", "Both"])
-        self._labeled(editor_layout, "Cycle", self.cycle)
-        self.latest_due = self._field(editor_layout, "Latest due / typical amount")
+        self._labeled(editor_layout, "Pay period", self.cycle)
+        self.latest_due = self._field(editor_layout, "Typical amount")
         self.method = self._field(editor_layout, "Default method")
 
         self.aliases = self._field(
@@ -930,7 +946,7 @@ class BillsPage(QWidget):
 
         splitter.addWidget(list_card)
         splitter.addWidget(editor_card)
-        splitter.setSizes([680, 400])
+        splitter.setSizes([760, 360])
         root.addWidget(splitter, 1)
 
         if auto_refresh:
@@ -1125,27 +1141,86 @@ class BillsPage(QWidget):
 
     def refresh(self) -> None:
         self._refresh_account_choices()
-        bills = self.database.list_bills(active_only=False)
+        all_bills = self.database.list_bills(active_only=False)
+        bills = [
+            bill for bill in all_bills
+            if self.show_inactive.isChecked() or int(bill["active"] or 0)
+        ]
+        accounts = {
+            str(account["plaid_account_id"]): account
+            for account in self.database.list_bank_accounts("production")
+        }
+        missing = [
+            str(bill["name"]) for bill in all_bills
+            if int(bill["active"] or 0) and not bill["payment_account_id"]
+        ]
+        if missing:
+            self.setup_warning.setText(
+                f"⚠ {len(missing)} active bill(s) have no Payment Account "
+                f"({', '.join(missing[:4])}{'…' if len(missing) > 4 else ''}). "
+                "They are not counted in the Bills Checking transfer and their "
+                "bank payments match less reliably. Click one to set it."
+            )
+        self.setup_warning.setVisible(bool(missing))
+
         sorting = begin_table_refresh(self.bill_table)
         self.bill_table.setRowCount(len(bills))
         for index, bill in enumerate(bills):
+            amount_cents = self._amount_cents(bill["latest_due"])
+            account = accounts.get(str(bill["payment_account_id"] or ""))
+            if account is not None:
+                paid_from = str(account["name"] or "Account")
+                if account["mask"]:
+                    paid_from += f" ••••{account['mask']}"
+            else:
+                paid_from = "⚠ Not set"
+            transfer = "Yes" if int(bill["transfer_required"] or 0) else "—"
+            cycle = str(bill["cycle"])
             values = [
                 (bill["name"], str(bill["name"]).casefold()),
-                (bill["cycle"], str(bill["cycle"])),
+                ("1st & 15th" if cycle == "Both" else cycle, cycle),
+                (
+                    money(amount_cents) if amount_cents is not None
+                    else (bill["latest_due"] or "—"),
+                    amount_cents if amount_cents is not None else -1,
+                ),
+                (paid_from, paid_from.casefold()),
+                (transfer, transfer),
                 (bill["default_method"] or "—", str(bill["default_method"] or "").casefold()),
-                ("Yes" if bill["active"] else "No", int(bool(bill["active"]))),
             ]
+            active = bool(int(bill["active"] or 0))
             for col, (value, sort_value) in enumerate(values):
+                text = str(value)
+                if col == 0 and not active:
+                    text += " (inactive)"
                 item = SortableTableWidgetItem(
-                    str(value),
+                    text,
                     sort_value=sort_value,
                     user_data=int(bill["id"]),
                 )
+                if col == 2:
+                    item.setTextAlignment(
+                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                    )
+                if not active:
+                    item.setForeground(QColor("#6b7488"))
+                elif col == 3 and account is None:
+                    item.setForeground(QColor("#ffd166"))
                 self.bill_table.setItem(index, col, item)
         end_table_refresh(self.bill_table, sorting)
 
         if not bills and self.selected_id is None:
             self._new_bill()
+
+    @staticmethod
+    def _amount_cents(raw: object) -> int | None:
+        text = str(raw or "").replace("$", "").replace(",", "").strip()
+        if not text:
+            return None
+        try:
+            return int(round(float(text) * 100))
+        except ValueError:
+            return None
 
     def _load_selected(self) -> None:
         items = self.bill_table.selectedItems()
