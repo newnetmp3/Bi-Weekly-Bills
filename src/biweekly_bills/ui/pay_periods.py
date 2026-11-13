@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from ..backups import BackupManager
 from ..database import Database
 from ..funding import build_funding_plan
+from ..funding_transfer import period_funding_status
 from .adaptive_progress import AdaptiveTextProgressBar
 from .context_menu import (
     begin_table_context_menu,
@@ -319,6 +320,11 @@ class PayPeriodsPage(QWidget):
         funding_row.addWidget(self.funding_details_button)
         funding_layout.addLayout(funding_row)
 
+        self.transfer_status = QLabel("")
+        self.transfer_status.setWordWrap(True)
+        self.transfer_status.setTextFormat(Qt.TextFormat.RichText)
+        funding_layout.addWidget(self.transfer_status)
+
         self.funding_detail = QLabel("")
         self.funding_detail.setObjectName("Muted")
         self.funding_detail.setWordWrap(True)
@@ -591,6 +597,56 @@ class PayPeriodsPage(QWidget):
             )
 
         self.funding_detail.setText(" · ".join(detail_parts))
+        self._refresh_transfer_status(funding, year, month)
+
+    def _refresh_transfer_status(self, funding, year: int, month: int) -> None:
+        """Say plainly whether this period's money is already in Bills."""
+        if self.current_view == "month":
+            scopes = [("1st", funding.first_transfer_cents), ("15th", funding.fifteenth_transfer_cents)]
+        elif self.current_view == "1st":
+            scopes = [("1st", funding.first_transfer_cents)]
+        else:
+            scopes = [("15th", funding.fifteenth_transfer_cents)]
+
+        def short(day) -> str:
+            return day.strftime("%b %d").replace(" 0", " ") if day else "unknown date"
+
+        lines: list[str] = []
+        for scope, still_needed in scopes:
+            status = period_funding_status(
+                self.database, str(funding.environment), year, month, scope
+            )
+            label = f"{scope} period"
+            if status.assigned:
+                parts = []
+                for day, actual, expected, saved_scope in status.assigned:
+                    diff = actual - expected
+                    fit = (
+                        "exactly enough" if diff == 0
+                        else f"{money(diff)} extra" if diff > 0
+                        else f"{money(-diff)} short"
+                    )
+                    whole = " (whole month)" if saved_scope == "month" else ""
+                    parts.append(f"{money(actual)} on {short(day)}{whole} — {fit}")
+                lines.append(
+                    f"<span style='color:#c8ff3d'>✓ {label}: transferred "
+                    + "; ".join(parts) + "</span>"
+                )
+            elif status.unassigned:
+                day, amount = status.unassigned[-1]
+                lines.append(
+                    f"<span style='color:#ffd166'>{label}: a {money(amount)} transfer "
+                    f"arrived {short(day)} but isn't assigned yet — open it on "
+                    "Transactions to assign it.</span>"
+                )
+            elif still_needed > 0:
+                lines.append(
+                    f"<span style='color:#ffd166'>{label}: not transferred yet — "
+                    f"move {money(still_needed)} into Bills Checking.</span>"
+                )
+            else:
+                lines.append(f"{label}: nothing to transfer.")
+        self.transfer_status.setText("<br>".join(lines))
 
     def _rows_for_view(self, year: int, month: int):
         if self.current_view == "month":

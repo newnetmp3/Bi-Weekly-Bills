@@ -289,3 +289,87 @@ def undo_funding_transfer_validation(
         str(row["environment"]),
         str(row["plaid_transaction_id"]),
     )
+
+
+@dataclass(frozen=True)
+class PeriodFundingStatus:
+    """What has been moved into Bills Checking for one pay period."""
+
+    assigned: tuple[tuple[date | None, int, int, str], ...]  # date, actual, expected, scope
+    unassigned: tuple[tuple[date | None, int], ...]  # date, amount
+
+    @property
+    def assigned_total(self) -> int:
+        return sum(actual for _d, actual, _e, _s in self.assigned)
+
+
+def period_funding_status(
+    database: Database,
+    environment: str,
+    year: int,
+    month: int,
+    scope: str,
+) -> PeriodFundingStatus:
+    """Transfers assigned to a 1st/15th/month period, plus loose deposits.
+
+    A whole-month assignment counts for both periods. Unassigned deposits
+    are those into Bills Checking in the month (and, for the 1st period, the
+    last week of the previous month) that nobody has assigned yet.
+    """
+    first = date(year, month, 1)
+    previous = first - timedelta(days=1)
+    rows: list[Any] = list(
+        database.list_bank_transactions(environment, limit=5000, year=year, month=month)
+    )
+    if scope in {"1st", "month"}:
+        rows.extend(
+            database.list_bank_transactions(
+                environment, limit=5000, year=previous.year, month=previous.month
+            )
+        )
+
+    assigned: list[tuple[date | None, int, int, str]] = []
+    unassigned: list[tuple[date | None, int]] = []
+    seen: set[str] = set()
+    for row in rows:
+        tx_id = str(row["plaid_transaction_id"])
+        if tx_id in seen:
+            continue
+        seen.add(tx_id)
+        if not (
+            int(row["is_bills_checking"] or 0)
+            and int(row["amount_cents"]) < 0
+            and not int(row["pending"])
+        ):
+            continue
+        tx_day = transaction_date(row)
+        saved = row["funding_validation_scope"]
+        if saved is not None:
+            if (
+                int(row["funding_validation_year"]) == year
+                and int(row["funding_validation_month"]) == month
+                and (saved == scope or saved == "month" or scope == "month")
+            ):
+                assigned.append(
+                    (
+                        tx_day,
+                        int(row["funding_actual_cents"]),
+                        int(row["funding_expected_cents"]),
+                        str(saved),
+                    )
+                )
+            continue
+        if tx_day is None:
+            continue
+        in_month = (tx_day.year, tx_day.month) == (year, month)
+        late_previous = (
+            (tx_day.year, tx_day.month) == (previous.year, previous.month)
+            and tx_day.day > previous.day - _BOUNDARY_DAYS
+        )
+        if scope == "1st" and (late_previous or (in_month and tx_day.day < 15)):
+            unassigned.append((tx_day, abs(int(row["amount_cents"]))))
+        elif scope == "15th" and in_month and tx_day.day >= 8:
+            unassigned.append((tx_day, abs(int(row["amount_cents"]))))
+        elif scope == "month" and (in_month or late_previous):
+            unassigned.append((tx_day, abs(int(row["amount_cents"]))))
+    return PeriodFundingStatus(tuple(assigned), tuple(unassigned))

@@ -26,10 +26,27 @@
 - Ticking **Paid** now fills in the paid amount from the amount due (if you have not entered one) and sets the bill to Paid, so "remaining" drops straight away. Unticking reverses it.
 - The checklist fits without sideways scrolling; the old spreadsheet columns are behind **Show workbook columns**.
 
+## One transfer for a group of bills
+
+- Click either side of a transfer into Bills Checking on **Transactions** and choose **Which bills does this transfer cover?** (1st period, 15th period, whole month, or next month's 1st for a month-end transfer). The best fit is pre-selected, the covered bills are listed, and it says if the transfer is exactly enough, extra or short.
+- Transfers into Bills Checking are no longer mistaken for bill payments.
+- **Pay Periods** shows whether the period's money is already in Bills Checking ("✓ transferred $890.15 on Sep 15 — exactly enough", "a transfer arrived but isn't assigned yet", or "not transferred yet — move $827.70").
+
+## Needs attention
+
+- **Overview** starts with a short to-do list: bills still to pay, a transfer to make or assign, last month's bills marked paid but not found at the bank, bills with no Payment Account, and bank-connection or sync problems. Each item has a button that goes straight to the fix.
+
+## Bills list
+
+- Shows Amount, Paid from, Bills transfer and Method for every bill, warns about bills with no Payment Account, and hides inactive bills unless you ask for them.
+
 ## Plainer wording
 
 - "Handled", "reconciled", "verified" and "unresolved" are replaced with "paid", "linked to a bill", "confirmed by bank" and "not linked" across Overview, Pay Periods and Transactions. Transactions buttons are now **Link to bill**, **Not a bill** and **Undo**.
 
 ## Fixes
+
+- Reports and exports use the same bill status as the rest of the app.
+- The Link a payment panel was rebuilt to show one clear state with only the buttons that apply, and payments near a month boundary can be linked to the neighbouring month's bill by hand.
 
 - An empty `XDG_DATA_HOME` no longer points the database at a relative path.

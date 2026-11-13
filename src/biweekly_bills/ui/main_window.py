@@ -447,6 +447,8 @@ class SidebarNavList(QListWidget):
 
 class DashboardPage(QWidget):
     open_pay_period = Signal(str)
+    # "transactions", "bills", "settings" or "sync"
+    navigate_requested = Signal(str)
 
     def __init__(
         self,
@@ -486,6 +488,24 @@ class DashboardPage(QWidget):
         self.month_selector.setCurrentIndex(self.current.month - 1)
         self.month_selector.currentIndexChanged.connect(self.refresh)
         self.year_selector.currentIndexChanged.connect(self.refresh)
+
+        # What needs doing today, independent of the month being viewed.
+        self.attention_card = QFrame()
+        self.attention_card.setObjectName("Card")
+        self.attention_card.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Maximum,
+        )
+        attention_layout = QVBoxLayout(self.attention_card)
+        attention_layout.setContentsMargins(16, 12, 16, 12)
+        attention_layout.setSpacing(6)
+        self.attention_title = QLabel("Needs attention")
+        self.attention_title.setObjectName("SectionTitle")
+        attention_layout.addWidget(self.attention_title)
+        self.attention_rows = QVBoxLayout()
+        self.attention_rows.setSpacing(4)
+        attention_layout.addLayout(self.attention_rows)
+        root.addWidget(self.attention_card)
 
         self.hero = QFrame()
         self.hero.setObjectName("HeroCard")
@@ -690,7 +710,63 @@ class DashboardPage(QWidget):
         card.detail_label = detail  # type: ignore[attr-defined]
         return card
 
+    def _clear_attention_rows(self) -> None:
+        while self.attention_rows.count():
+            item = self.attention_rows.takeAt(0)
+            layout = item.layout()
+            if layout is not None:
+                while layout.count():
+                    child = layout.takeAt(0).widget()
+                    if child is not None:
+                        child.setParent(None)
+                        child.deleteLater()
+            elif item.widget() is not None:
+                item.widget().setParent(None)
+                item.widget().deleteLater()
+
+    def _refresh_attention(self) -> None:
+        from ..attention import attention_items
+
+        self._clear_attention_rows()
+        try:
+            items = attention_items(
+                self.database,
+                connection_action=connection_state(self.database).action,
+            )
+        except Exception as exc:  # never let the to-do list break Overview
+            items = []
+            self.attention_title.setText(f"Needs attention (could not check: {exc})")
+        if not items:
+            self.attention_title.setText("✓ Nothing needs your attention right now")
+            return
+        self.attention_title.setText(f"Needs attention ({len(items)})")
+        for entry in items:
+            row = QHBoxLayout()
+            dot = QLabel("●")
+            dot.setStyleSheet(
+                "color: #ffd166;" if entry.severity == "action" else "color: #7aa2ff;"
+            )
+            dot.setFixedWidth(16)
+            text = QLabel(entry.text)
+            text.setWordWrap(True)
+            button = QPushButton(entry.button)
+            button.setObjectName("SecondaryButton")
+            button.clicked.connect(
+                lambda _checked=False, target=entry.target: self._open_attention(target)
+            )
+            row.addWidget(dot, 0, Qt.AlignmentFlag.AlignTop)
+            row.addWidget(text, 1)
+            row.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
+            self.attention_rows.addLayout(row)
+
+    def _open_attention(self, target: str) -> None:
+        if target.startswith("pay_periods:"):
+            self.open_pay_period.emit(target.split(":", 1)[1])
+        else:
+            self.navigate_requested.emit(target)
+
     def refresh(self) -> None:
+        self._refresh_attention()
         year = int(self.year_selector.currentText()) if self.year_selector.currentText() else self.current.year
         month = self.month_selector.currentIndex() + 1
         summary = self.database.month_summary(year, month)
@@ -1421,6 +1497,7 @@ class MainWindow(QMainWindow):
         )
         self.pages.addWidget(self.pay_periods)
         self.dashboard.open_pay_period.connect(self._open_pay_period)
+        self.dashboard.navigate_requested.connect(self._open_from_overview)
         self.transactions = TransactionsPage(
             database,
             self._refresh_reconciliation_pages,
@@ -1660,6 +1737,24 @@ class MainWindow(QMainWindow):
         if current != 6:
             self._refresh_page(current)
             self._page_dirty[current] = False
+
+    def _open_from_overview(self, target: str) -> None:
+        if target == "sync":
+            self._sync_bank()
+            return
+        page = target.split(":", 1)[0]
+        if page == "recheck":
+            page = "transactions"
+        if page not in {"transactions", "bills", "settings"}:
+            return
+        index, title, subtitle = self._nav_defaults[page]
+        self._navigate(index, title, subtitle)
+        if target == "transactions:funding":
+            match_index = self.transactions.match_filter.findData("funding")
+            if match_index >= 0:
+                self.transactions.match_filter.setCurrentIndex(match_index)
+        elif target == "recheck":
+            self.transactions._recheck_matches()
 
     def _open_pay_period(self, cycle: str) -> None:
         self.pay_periods.set_view(cycle, refresh=False)
