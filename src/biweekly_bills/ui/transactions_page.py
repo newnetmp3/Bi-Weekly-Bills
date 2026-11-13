@@ -94,6 +94,9 @@ def plaid_amount(cents: int) -> str:
     return money(cents)
 
 
+_NOT_LINKED = "Not linked"
+
+
 class TransactionsPage(QWidget):
     def __init__(
         self,
@@ -153,18 +156,18 @@ class TransactionsPage(QWidget):
         toolbar.addWidget(self.state_filter, 1)
 
         self.match_filter = QComboBox()
-        self.match_filter.addItem("All reconciliation states", "all")
+        self.match_filter.addItem("All payments", "all")
         self.match_filter.addItem("Suggested", "suggested")
         self.match_filter.addItem("Needs review", "review")
-        self.match_filter.addItem("Reconciled", "matched")
-        self.match_filter.addItem("Ignored", "ignored")
+        self.match_filter.addItem("Linked to a bill", "matched")
+        self.match_filter.addItem("Marked not a bill", "ignored")
         self.match_filter.addItem("Funding transfers", "funding")
         self.match_filter.addItem("Internal transfers", "internal")
-        self.match_filter.addItem("Unresolved", "unresolved")
+        self.match_filter.addItem("Not linked yet", "unresolved")
         self.match_filter.currentIndexChanged.connect(self._apply_filters)
         toolbar.addWidget(self.match_filter, 1)
 
-        refresh = QPushButton("Refresh local")
+        refresh = QPushButton("Reload")
         refresh.setObjectName("SecondaryButton")
         refresh.clicked.connect(self.refresh)
         toolbar.addWidget(refresh)
@@ -236,9 +239,9 @@ class TransactionsPage(QWidget):
         reconcile_layout.setSpacing(10)
 
         top = QHBoxLayout()
-        title = QLabel("Reconcile selected transaction")
+        title = QLabel("Link a payment to a bill")
         title.setObjectName("SectionTitle")
-        self.selected_label = QLabel("Select a posted payment transaction above.")
+        self.selected_label = QLabel("Pick a payment in the list above.")
         self.selected_label.setObjectName("Muted")
         top.addWidget(title)
         top.addSpacing(10)
@@ -247,7 +250,7 @@ class TransactionsPage(QWidget):
         reconcile_layout.addLayout(top)
 
         target_row = QHBoxLayout()
-        target_label = QLabel("Target bill")
+        target_label = QLabel("Bill")
         target_label.setObjectName("MetricLabel")
         target_row.addWidget(target_label)
         self.target_bill = QComboBox()
@@ -260,10 +263,10 @@ class TransactionsPage(QWidget):
         reconcile_layout.addLayout(target_row)
 
         metrics = QHBoxLayout()
-        self.expected_value = self._metric(metrics, "Expected")
+        self.expected_value = self._metric(metrics, "Bill amount")
         self.bank_value = self._metric(metrics, "Bank amount")
-        self.existing_paid_value = self._metric(metrics, "Existing Paid")
-        self.difference_value = self._metric(metrics, "Bank − Expected")
+        self.existing_paid_value = self._metric(metrics, "Recorded as paid")
+        self.difference_value = self._metric(metrics, "Difference")
         reconcile_layout.addLayout(metrics)
 
         self.warning = QLabel("")
@@ -272,17 +275,17 @@ class TransactionsPage(QWidget):
         reconcile_layout.addWidget(self.warning)
 
         actions = QHBoxLayout()
-        self.accept_button = QPushButton("Accept Match")
+        self.accept_button = QPushButton("Link to bill")
         self.accept_button.setObjectName("PrimaryButton")
         self.accept_button.clicked.connect(self._accept)
         actions.addWidget(self.accept_button)
 
-        self.ignore_button = QPushButton("Ignore")
+        self.ignore_button = QPushButton("Not a bill")
         self.ignore_button.setObjectName("SecondaryButton")
         self.ignore_button.clicked.connect(self._ignore)
         actions.addWidget(self.ignore_button)
 
-        self.undo_button = QPushButton("Undo Match / Ignore")
+        self.undo_button = QPushButton("Undo")
         self.undo_button.setObjectName("SecondaryButton")
         self.undo_button.clicked.connect(self._undo)
         actions.addWidget(self.undo_button)
@@ -380,10 +383,10 @@ class TransactionsPage(QWidget):
         detail_layout.setSpacing(8)
 
         detail_title_row = QHBoxLayout()
-        detail_title = QLabel("Transaction Detail")
+        detail_title = QLabel("Payment details")
         detail_title.setObjectName("SectionTitle")
         self.transaction_detail_note = QLabel(
-            "Select a transaction to see Plaid merchant metadata."
+            "Pick a payment to see merchant details."
         )
         self.transaction_detail_note.setObjectName("Muted")
         detail_title_row.addWidget(detail_title)
@@ -886,9 +889,9 @@ class TransactionsPage(QWidget):
                 )
                 reconciliation = f"Funding validated → {scope_label}"
             elif disposition == "matched":
-                reconciliation = f"Matched → {row['reconciled_bill_name']}"
+                reconciliation = f"Linked → {row['reconciled_bill_name']}"
             elif disposition == "ignored":
-                reconciliation = "Ignored"
+                reconciliation = "Not a bill"
             elif suggestion:
                 reconciliation = "Suggested"
             elif needs_review:
@@ -898,7 +901,7 @@ class TransactionsPage(QWidget):
                     else "Needs review"
                 )
             else:
-                reconciliation = "Unresolved"
+                reconciliation = _NOT_LINKED
 
             if (
                 match_state == "suggested"
@@ -921,7 +924,7 @@ class TransactionsPage(QWidget):
                 continue
             if (
                 match_state == "unresolved"
-                and reconciliation != "Unresolved"
+                and reconciliation != _NOT_LINKED
             ):
                 continue
 
@@ -1047,7 +1050,7 @@ class TransactionsPage(QWidget):
 
     def _clear_transaction_detail(self) -> None:
         self.transaction_detail_note.setText(
-            "Select a transaction to see Plaid merchant metadata."
+            "Pick a payment to see merchant details."
         )
         self.transaction_detail_note.setVisible(True)
         for label, value in self._transaction_detail_fields.values():
@@ -1705,7 +1708,7 @@ class TransactionsPage(QWidget):
         row = self._selected_row()
         bill_instance_id = self.target_bill.currentData()
         if row is None or bill_instance_id is None:
-            self.action_status.setText("Choose a target bill first.")
+            self.action_status.setText("Choose which bill this payment is for first.")
             return
 
         try:
@@ -1717,11 +1720,11 @@ class TransactionsPage(QWidget):
 
         if preview.already_agrees:
             self.action_status.setText(
-                f"Matched {preview.bill_name}; existing Paid already agreed with the bank."
+                f"Linked to {preview.bill_name}. The recorded amount already matched the bank."
             )
         else:
             self.action_status.setText(
-                f"Matched {preview.bill_name}; Paid is now {money(preview.bank_amount_cents)}."
+                f"Linked to {preview.bill_name}. Paid amount is now {money(preview.bank_amount_cents)}."
             )
         self.on_data_changed()
         self.refresh()
@@ -1764,7 +1767,7 @@ class TransactionsPage(QWidget):
         except Exception as exc:
             self.action_status.setText(str(exc))
             return
-        self.action_status.setText("Transaction marked ignored. No bill is linked to it.")
+        self.action_status.setText("Marked as not a bill payment.")
         self.on_data_changed()
         self.refresh()
 
@@ -1779,7 +1782,7 @@ class TransactionsPage(QWidget):
             self.action_status.setText(str(exc))
             return
         self.action_status.setText(
-            "Reconciliation undone. Any prior Paid/Status values were restored."
+            "Undone. The bill's earlier paid amount and status were restored."
         )
         self.on_data_changed()
         self.refresh()
@@ -1788,7 +1791,7 @@ class TransactionsPage(QWidget):
         self.selected_transaction_id = None
         self.reconcile_card.setVisible(True)
         self.funding_card.setVisible(False)
-        self.selected_label.setText("Select a posted payment transaction above.")
+        self.selected_label.setText("Pick a payment in the list above.")
         self.target_bill.blockSignals(True)
         self.target_bill.clear()
         self.target_bill.addItem("Choose a bill…", None)

@@ -44,7 +44,7 @@ from .context_menu import (
 from .transactions_page import TransactionsPage
 from .formatting import money, relative_time, schedule_balance
 from .overview_chart import DonutBreakdownChart
-from .pay_periods import PayPeriodsPage
+from .pay_periods import PayPeriodsPage, bill_state_text
 from .reconciliation_page import ReconciliationPage
 from .reports_page import ReportsPage
 from .settings_page import SettingsPage
@@ -574,7 +574,7 @@ class DashboardPage(QWidget):
         self.table.verticalHeader().setVisible(False)
         configure_resizable_columns(
             self.table,
-            (220, 90, 105, 105, 150, 125, 190),
+            (200, 70, 100, 100, 110, 210, 190),
         )
         set_sortable(self.table)
         self.table.setContextMenuPolicy(
@@ -706,16 +706,14 @@ class DashboardPage(QWidget):
         self.remaining.setText(money(balance_amount))
         workflow = self.database.workflow_progress(year, month)
         self.progress_text.setText(
-            f"{workflow.handled_count} of {workflow.bill_count} handled · "
-            f"{workflow.bank_verified_count} bank verified"
+            f"{workflow.handled_count} of {workflow.bill_count} bills paid · "
+            f"{workflow.bank_verified_count} confirmed by bank"
         )
         closeout = self.database.month_closeout(year, month)
         unfinished = max(closeout.bill_count - closeout.handled_count, 0)
         self.closeout_text.setText(
-            f"Closeout · {closeout.verified_count} verified · "
-            f"{closeout.paid_unverified_count} paid unverified · "
-            f"{unfinished} unfinished · "
-            f"{money(closeout.remaining_cents)} remaining"
+            f"{closeout.paid_unverified_count} paid, waiting for bank · "
+            f"{unfinished} still to pay"
         )
         self.due_card.value_label.setText(money(summary.due_cents))  # type: ignore[attr-defined]
         self.paid_card.value_label.setText(money(summary.paid_cents))  # type: ignore[attr-defined]
@@ -766,8 +764,8 @@ class DashboardPage(QWidget):
             )
             card.amount_label.setText(money(cycle_amount))  # type: ignore[attr-defined]
             card.detail_label.setText(  # type: ignore[attr-defined]
-                f"{cycle_label} · {cycle_workflow.handled_count}/"
-                f"{cycle_workflow.bill_count} handled · "
+                f"{cycle_label} · {cycle_workflow.handled_count} of "
+                f"{cycle_workflow.bill_count} paid · "
                 f"{money(cycle_summary.paid_cents)} paid"
             )
 
@@ -781,7 +779,7 @@ class DashboardPage(QWidget):
                 source_label += f" ••••{row['transfer_source_account_mask']}"
 
             if transfer_required is None:
-                funding = "Review transfer setting"
+                funding = "Transfer setting not chosen"
             elif transfer_required:
                 funding = source_label or "Transfer source not set"
             else:
@@ -793,7 +791,7 @@ class DashboardPage(QWidget):
                 (money(row["due_cents"]), -1 if row["due_cents"] is None else int(row["due_cents"])),
                 (money(row["paid_cents"]), -1 if row["paid_cents"] is None else int(row["paid_cents"])),
                 (row["method"] or "—", str(row["method"] or "").casefold()),
-                (row["status"] or "—", str(row["status"] or "").casefold()),
+                (bill_state_text(row), bill_state_text(row).casefold()),
                 (funding, str(funding).casefold()),
             ]
             for col, (value, sort_value) in enumerate(values):
