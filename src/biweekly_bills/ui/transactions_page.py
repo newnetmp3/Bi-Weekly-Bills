@@ -53,6 +53,7 @@ from ..reconciliation import (
     undo_reconciliation,
 )
 from ..settings import load_settings
+from .busy_cursor import begin_busy_cursor, end_busy_cursor
 from .formatting import relative_time
 from .context_menu import (
     begin_table_context_menu,
@@ -167,6 +168,15 @@ class TransactionsPage(QWidget):
         refresh.setObjectName("SecondaryButton")
         refresh.clicked.connect(self.refresh)
         toolbar.addWidget(refresh)
+
+        recheck = QPushButton("Re-check matches")
+        recheck.setObjectName("SecondaryButton")
+        recheck.setToolTip(
+            "Look for payments matched to the wrong month and bills that "
+            "can now be matched. Nothing changes until you approve it."
+        )
+        recheck.clicked.connect(self._recheck_matches)
+        toolbar.addWidget(recheck)
 
         root.addLayout(toolbar)
 
@@ -1715,6 +1725,34 @@ class TransactionsPage(QWidget):
             )
         self.on_data_changed()
         self.refresh()
+
+    def _recheck_matches(self) -> None:
+        from ..match_review import propose_match_corrections
+        from .match_review_dialog import MatchReviewDialog
+
+        begin_busy_cursor()
+        try:
+            corrections = propose_match_corrections(self.database)
+        except Exception as exc:
+            end_busy_cursor()
+            self.action_status.setText(f"Re-check failed: {exc}")
+            return
+        end_busy_cursor()
+
+        dialog = MatchReviewDialog(
+            self.database,
+            self.backup_manager,
+            corrections,
+            parent=self,
+        )
+        dialog.exec()
+        if dialog.applied:
+            self.action_status.setText(
+                f"Applied {dialog.applied} match correction(s). "
+                "A backup was made first."
+            )
+            self.on_data_changed()
+            self.refresh()
 
     def _ignore(self) -> None:
         row = self._selected_row()

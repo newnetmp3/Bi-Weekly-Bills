@@ -87,3 +87,48 @@ class MonthBoundaryMatchingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MatchCorrectionTests(MonthBoundaryMatchingTests):
+    def test_recheck_fixes_one_month_shifted_chain(self):
+        from datetime import date
+
+        from biweekly_bills.match_review import (
+            apply_match_correction,
+            propose_match_corrections,
+        )
+
+        aug = self._instance(8, "1st", 50000)
+        sep = self._instance(9, "1st", 50000)
+        self._instance(10, "1st", 50000)
+        self._tx("jul31", "2026-07-31", 50000)
+        self._tx("aug31", "2026-08-31", 50000)
+        self._tx("sep30", "2026-09-30", 50000)
+        # What the old same-month-only matcher produced: shifted by a month.
+        self.db.reconcile_transaction(
+            environment="production", plaid_transaction_id="aug31", bill_instance_id=aug
+        )
+        self.db.reconcile_transaction(
+            environment="production", plaid_transaction_id="sep30", bill_instance_id=sep
+        )
+
+        corrections = propose_match_corrections(
+            self.db, "production", today=date(2026, 11, 13)
+        )
+        self.assertEqual(
+            {(c.plaid_transaction_id, c.from_instance_id is None) for c in corrections},
+            {("jul31", True), ("aug31", False), ("sep30", False)},
+        )
+        # Nothing changes until applied.
+        self.assertEqual(self._verified_by(8), "aug31")
+
+        for correction in corrections:
+            apply_match_correction(self.db, correction)
+
+        self.assertEqual(self._verified_by(8), "jul31")
+        self.assertEqual(self._verified_by(9), "aug31")
+        self.assertEqual(self._verified_by(10), "sep30")
+        self.assertEqual(
+            propose_match_corrections(self.db, "production", today=date(2026, 11, 13)),
+            [],
+        )
