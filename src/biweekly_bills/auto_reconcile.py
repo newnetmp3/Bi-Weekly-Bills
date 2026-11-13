@@ -1156,8 +1156,16 @@ def _auto_reconcile(
     scanned = 0
     review = internal_review
 
+    # Money moved into Bills Checking funds bills; it is not itself a bill
+    # payment, so it is never matched to one.
+    from .funding_transfer import bills_funding_pairs
+
+    funding_transfers = set(bills_funding_pairs(rows))
+
     for row in rows:
         if int(row["pending"] or 0) or int(row["amount_cents"]) <= 0:
+            continue
+        if str(row["plaid_transaction_id"]) in funding_transfers:
             continue
         if row["reconciliation_disposition"] is not None:
             continue

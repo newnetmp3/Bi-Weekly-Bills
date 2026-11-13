@@ -216,8 +216,15 @@ class TransactionsPeriodFilterTests(unittest.TestCase):
                 return_value=(assessment, False),
             ) as review_candidate:
                 page = TransactionsPage(db, lambda: None, backups)
+                self.addCleanup(page.close)
                 page.resize(1200, 820)
                 page.show()
+                self.app.processEvents()
+                # The data is from September 2026; the page opens on the
+                # current month, so pick September explicitly.
+                page.period_filter.setCurrentIndex(
+                    page.period_filter.findData(page._period_key(2026, 9))
+                )
                 self.app.processEvents()
 
                 self.assertEqual(page.table.rowCount(), 1)
@@ -281,8 +288,13 @@ class TransactionsPeriodFilterTests(unittest.TestCase):
 
             with patch.dict(os.environ, {"PLAID_ENV": "sandbox"}):
                 page = TransactionsPage(db, lambda: None, backups)
+                self.addCleanup(page.close)
                 page.resize(1200, 820)
                 page.show()
+                self.app.processEvents()
+                page.period_filter.setCurrentIndex(
+                    page.period_filter.findData(page._period_key(2026, 9))
+                )
                 self.app.processEvents()
 
                 review_index = page.match_filter.findData("review")

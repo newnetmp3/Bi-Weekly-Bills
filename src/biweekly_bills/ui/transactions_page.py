@@ -7,16 +7,16 @@ from PySide6.QtCore import QSize, QTimer, QUrl, Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QComboBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QPushButton,
+    QRadioButton,
     QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
 from ..auto_reconcile import (
     best_review_candidate,
     best_review_candidates,
-    expected_payment_cents,
 )
 from ..backups import BackupManager
 from ..bank_sync import suggested_bill_for_transaction
@@ -38,8 +37,10 @@ from ..merchant_profiles import (
     safe_remote_logo_url,
 )
 from ..funding_transfer import (
-    build_funding_transfer_preview,
-    suggested_funding_scope,
+    bills_deposit_for_transfer,
+    bills_funding_pairs,
+    funding_bills,
+    funding_targets,
     undo_funding_transfer_validation,
     validate_funding_transfer,
 )
@@ -169,7 +170,7 @@ class TransactionsPage(QWidget):
         self.match_filter.addItem("Needs review", "review")
         self.match_filter.addItem("Linked to a bill", "matched")
         self.match_filter.addItem("Marked not a bill", "ignored")
-        self.match_filter.addItem("Funding transfers", "funding")
+        self.match_filter.addItem("Transfers into Bills", "funding")
         self.match_filter.addItem("Card and loan payments", "internal")
         self.match_filter.addItem("Not linked yet", "unresolved")
         self.match_filter.currentIndexChanged.connect(self._apply_filters)
@@ -329,76 +330,75 @@ class TransactionsPage(QWidget):
         self.funding_card.setObjectName("Card")
         funding_layout = QVBoxLayout(self.funding_card)
         funding_layout.setContentsMargins(18, 16, 18, 18)
-        funding_layout.setSpacing(10)
+        funding_layout.setSpacing(8)
 
-        funding_top = QHBoxLayout()
-        funding_title = QLabel("Validate Bills funding transfer")
-        funding_title.setObjectName("SectionTitle")
-        self.funding_selected_label = QLabel(
-            "Select an incoming transfer deposited into Bills Checking."
-        )
-        self.funding_selected_label.setObjectName("Muted")
-        funding_top.addWidget(funding_title)
-        funding_top.addSpacing(10)
-        funding_top.addWidget(self.funding_selected_label)
-        funding_top.addStretch(1)
-        funding_layout.addLayout(funding_top)
+        self.funding_selected_label = QLabel("")
+        self.funding_selected_label.setObjectName("SectionTitle")
+        self.funding_selected_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.funding_meta = QLabel("")
+        self.funding_meta.setObjectName("Muted")
+        self.funding_meta.setWordWrap(True)
+        funding_layout.addWidget(self.funding_selected_label)
+        funding_layout.addWidget(self.funding_meta)
 
-        funding_scope_row = QHBoxLayout()
-        funding_scope_label = QLabel("Funding scope")
-        funding_scope_label.setObjectName("MetricLabel")
-        funding_scope_row.addWidget(funding_scope_label)
-        self.funding_scope = QComboBox()
-        self.funding_scope.addItem("1st pay period", "1st")
-        self.funding_scope.addItem("15th pay period", "15th")
-        self.funding_scope.addItem("Whole month", "month")
-        self.funding_scope.currentIndexChanged.connect(
-            self._update_funding_transfer_preview
-        )
-        funding_scope_row.addWidget(self.funding_scope)
-        self.funding_period_label = QLabel("")
-        self.funding_period_label.setObjectName("Pill")
-        funding_scope_row.addWidget(self.funding_period_label)
-        funding_scope_row.addStretch(1)
-        funding_layout.addLayout(funding_scope_row)
+        self.funding_state_title = QLabel("")
+        self.funding_state_title.setObjectName("SectionTitle")
+        self.funding_state_title.setWordWrap(True)
+        self.funding_state_detail = _AutoHideLabel("")
+        self.funding_state_detail.setObjectName("Muted")
+        self.funding_state_detail.setWordWrap(True)
+        funding_layout.addSpacing(4)
+        funding_layout.addWidget(self.funding_state_title)
+        funding_layout.addWidget(self.funding_state_detail)
 
-        funding_metrics = QHBoxLayout()
-        self.funding_expected_value = self._metric(
-            funding_metrics, "Scheduled transfer target"
-        )
-        self.funding_actual_value = self._metric(
-            funding_metrics, "Bank transfer"
-        )
-        self.funding_difference_value = self._metric(
-            funding_metrics, "Transfer − Scheduled"
-        )
-        funding_layout.addLayout(funding_metrics)
+        # One radio button per group of bills the transfer could cover.
+        self.funding_options_box = QWidget()
+        self.funding_options_layout = QVBoxLayout(self.funding_options_box)
+        self.funding_options_layout.setContentsMargins(0, 2, 0, 2)
+        self.funding_options_layout.setSpacing(4)
+        self.funding_option_group = QButtonGroup(self)
+        self.funding_option_group.setExclusive(True)
+        # A bound method, not a lambda: a lambda capturing self would keep the
+        # page alive in a reference cycle after it is closed.
+        self.funding_option_group.idToggled.connect(self._funding_option_toggled)
+        self._funding_targets: list[Any] = []
+        funding_layout.addWidget(self.funding_options_box)
 
-        self.funding_warning = QLabel("")
-        self.funding_warning.setObjectName("Muted")
-        self.funding_warning.setWordWrap(True)
-        funding_layout.addWidget(self.funding_warning)
+        self.funding_covers_label = _AutoHideLabel("")
+        self.funding_covers_label.setWordWrap(True)
+        funding_layout.addWidget(self.funding_covers_label)
+        self.funding_compare_label = _AutoHideLabel("")
+        self.funding_compare_label.setWordWrap(True)
+        funding_layout.addWidget(self.funding_compare_label)
 
         funding_actions = QHBoxLayout()
-        self.validate_funding_button = QPushButton("Validate Funding Transfer")
+        self.validate_funding_button = QPushButton("Assign")
         self.validate_funding_button.setObjectName("PrimaryButton")
         self.validate_funding_button.clicked.connect(
             self._validate_funding_transfer
         )
         funding_actions.addWidget(self.validate_funding_button)
 
-        self.undo_funding_button = QPushButton("Undo Funding Validation")
+        self.change_funding_button = QPushButton("Change")
+        self.change_funding_button.setObjectName("SecondaryButton")
+        self.change_funding_button.clicked.connect(self._start_changing_funding)
+        funding_actions.addWidget(self.change_funding_button)
+
+        self.undo_funding_button = QPushButton("Unassign")
         self.undo_funding_button.setObjectName("SecondaryButton")
         self.undo_funding_button.clicked.connect(
             self._undo_funding_validation
         )
         funding_actions.addWidget(self.undo_funding_button)
         funding_actions.addStretch(1)
-
-        self.funding_action_status = QLabel("")
-        self.funding_action_status.setObjectName("Muted")
-        funding_actions.addWidget(self.funding_action_status)
         funding_layout.addLayout(funding_actions)
+
+        self.funding_action_status = _AutoHideLabel("")
+        self.funding_action_status.setObjectName("Muted")
+        self.funding_action_status.setWordWrap(True)
+        funding_layout.addWidget(self.funding_action_status)
+        self._funding_row_id: str | None = None
+        self._changing_funding = False
 
         root.addWidget(self.funding_card)
         self.funding_card.setVisible(False)
@@ -662,6 +662,11 @@ class TransactionsPage(QWidget):
         self.period_filter.blockSignals(False)
 
 
+    def hideEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        # Don't run a delayed filter pass for a page nobody can see.
+        self._filter_timer.stop()
+        super().hideEvent(event)
+
     def _schedule_filter(self, *_args) -> None:
         self._filter_timer.start()
 
@@ -865,15 +870,29 @@ class TransactionsPage(QWidget):
                 continue
             cheap_rows.append(row)
 
-        self._ensure_review_cache(cheap_rows)
+        funding_pairs = bills_funding_pairs(self._rows)
+        self._ensure_review_cache(
+            [r for r in cheap_rows if str(r["plaid_transaction_id"]) not in funding_pairs]
+        )
 
         filtered: list[tuple[Any, str | None, str]] = []
         for row in cheap_rows:
-            suggestion = suggested_bill_for_transaction(row)
+            funding_deposit = funding_pairs.get(str(row["plaid_transaction_id"]))
+            if funding_deposit is None and (
+                int(row["amount_cents"]) < 0
+                and int(row["is_bills_checking"] or 0)
+                and not int(row["pending"])
+            ):
+                funding_deposit = row
+            suggestion = (
+                None if funding_deposit is not None
+                else suggested_bill_for_transaction(row)
+            )
             review_assessment = None
             review_ambiguous = False
             if (
-                not int(row["pending"] or 0)
+                funding_deposit is None
+                and not int(row["pending"] or 0)
                 and int(row["amount_cents"]) > 0
                 and row["reconciliation_disposition"] is None
                 and row["internal_transfer_role"] is None
@@ -908,13 +927,21 @@ class TransactionsPage(QWidget):
                 reconciliation = (
                     f"Card received payment → {internal_bill}"
                 )
-            elif funding_scope:
-                scope_label = (
-                    "Whole month"
-                    if funding_scope == "month"
-                    else f"{funding_scope} pay period"
-                )
-                reconciliation = f"Funding validated → {scope_label}"
+            elif funding_deposit is not None:
+                assigned = funding_deposit["funding_validation_scope"]
+                if assigned:
+                    scope_label = (
+                        "whole month" if assigned == "month" else str(assigned)
+                    )
+                    month_name = MONTH_NAMES[
+                        int(funding_deposit["funding_validation_month"]) - 1
+                    ][:3]
+                    reconciliation = (
+                        f"Bills funding → {month_name} "
+                        f"{int(funding_deposit['funding_validation_year'])}, {scope_label}"
+                    )
+                else:
+                    reconciliation = "Into Bills · not assigned"
             elif disposition == "matched":
                 reconciliation = f"Linked → {row['reconciled_bill_name']}"
             elif disposition == "ignored":
@@ -945,7 +972,7 @@ class TransactionsPage(QWidget):
                 continue
             if match_state == "ignored" and disposition != "ignored":
                 continue
-            if match_state == "funding" and not funding_scope:
+            if match_state == "funding" and funding_deposit is None:
                 continue
             if match_state == "internal" and internal_role is None:
                 continue
@@ -1185,23 +1212,31 @@ class TransactionsPage(QWidget):
         if row["internal_transfer_role"] == "destination":
             self.reconcile_card.setVisible(True)
             self.funding_card.setVisible(False)
-            self._clear_funding_transfer_panel(keep_selection=True)
+            self._clear_funding_transfer_panel()
             self._render_link_state(row)
             return
 
-        funding_mode = (
-            row["funding_validation_scope"] is not None
-            or (
-                not int(row["pending"])
-                and int(row["amount_cents"]) < 0
-                and int(row["is_bills_checking"] or 0)
-            )
+        # Money moved into Bills Checking (either side of the transfer) is
+        # assigned to a group of bills instead of being linked to one bill.
+        is_bills_deposit = (
+            not int(row["pending"])
+            and int(row["amount_cents"]) < 0
+            and int(row["is_bills_checking"] or 0)
         )
-        self.reconcile_card.setVisible(not funding_mode)
-        self.funding_card.setVisible(funding_mode)
+        deposit = row if is_bills_deposit else None
+        if deposit is None and row["reconciliation_disposition"] is None:
+            deposit = bills_deposit_for_transfer(self.database, row)
+        if deposit is not None:
+            if str(deposit["plaid_transaction_id"]) != self._funding_row_id:
+                self._changing_funding = False
+                self.funding_action_status.setText("")
+            self._show_funding_for(row, deposit)
+            return
 
+        self.funding_card.setVisible(False)
+        self.reconcile_card.setVisible(True)
+        self._clear_funding_transfer_panel()
         self._render_link_state(row)
-        self._load_funding_transfer_panel(row)
 
     # ---- "Link a payment to a bill" panel -----------------------------
 
@@ -1520,215 +1555,245 @@ class TransactionsPage(QWidget):
             not blocked and not int(row["pending"]) and int(row["amount_cents"]) > 0
         )
 
-    def _load_funding_transfer_panel(self, row: Any) -> None:
-        actual = int(row["amount_cents"])
-        is_candidate = (
-            not int(row["pending"])
-            and actual < 0
-            and int(row["is_bills_checking"] or 0)
+    # ---- "Transfer into Bills Checking" panel --------------------------
+
+    def _funding_row(self) -> Any | None:
+        if not self._funding_row_id:
+            return None
+        return self.database.get_bank_transaction(
+            self._environment(), self._funding_row_id
         )
-        if not is_candidate:
-            self._clear_funding_transfer_panel(keep_selection=True)
-            if actual >= 0:
-                self.funding_warning.setText(
-                    "This is not an incoming transfer to Bills Checking."
-                )
-            elif int(row["pending"]):
-                self.funding_warning.setText(
-                    "Pending incoming transfers cannot be validated yet."
-                )
-            else:
-                self.funding_warning.setText(
-                    "Funding transfer validation only applies to deposits into the designated Bills Checking account."
-                )
+
+    @staticmethod
+    def _funding_period_label(year: int, month: int, scope: str) -> str:
+        period = "whole month" if scope == "month" else f"{scope} period bills"
+        return f"{period} · {MONTH_NAMES[int(month) - 1]} {int(year)}"
+
+    def _clear_funding_options(self) -> None:
+        for button in list(self.funding_option_group.buttons()):
+            self.funding_option_group.removeButton(button)
+            button.setParent(None)
+            button.deleteLater()
+        self._funding_targets = []
+
+    def _show_funding_for(self, selected: Any, deposit: Any) -> None:
+        """Show the funding panel for a deposit (or the transfer that made it)."""
+        self.reconcile_card.setVisible(False)
+        self.funding_card.setVisible(True)
+        self._funding_row_id = str(deposit["plaid_transaction_id"])
+        amount = abs(int(deposit["amount_cents"]))
+        merchant = selected["merchant_name"] or selected["name"] or "Transfer"
+        self.funding_selected_label.setText(f"{money(amount)}  ·  {merchant}")
+        deposit_date = transaction_date(deposit)
+        when = (
+            deposit_date.strftime("%b %d, %Y").replace(" 0", " ")
+            if deposit_date else "no date"
+        )
+        bills_account = self._account_text(
+            deposit["account_name"], deposit["account_mask"], "Bills Checking"
+        )
+        if str(selected["plaid_transaction_id"]) != self._funding_row_id:
+            source = self._account_text(
+                selected["account_name"], selected["account_mask"], "your checking"
+            )
+            self.funding_meta.setText(
+                f"Moved from {source} into {bills_account} · arrived {when}"
+            )
+        else:
+            self.funding_meta.setText(f"{when} · into {bills_account}")
+        self._render_funding_state()
+
+    def _render_funding_state(self) -> None:
+        deposit = self._funding_row()
+        self._clear_funding_options()
+        self.funding_action_status.setText(self.funding_action_status.text())
+        if deposit is None:
+            return
+        saved_scope = deposit["funding_validation_scope"]
+        if saved_scope is not None and not self._changing_funding:
+            year = int(deposit["funding_validation_year"])
+            month = int(deposit["funding_validation_month"])
+            expected = int(deposit["funding_expected_cents"])
+            actual = int(deposit["funding_actual_cents"])
+            self.funding_state_title.setText(
+                "✓ Covers the " + self._funding_period_label(year, month, str(saved_scope))
+            )
+            self.funding_state_detail.setText(
+                f"Needed {money(expected)} · transferred {money(actual)} "
+                f"({self._funding_fit_text(actual - expected)})."
+            )
+            bills = funding_bills(self.database, year, month, str(saved_scope))
+            self.funding_covers_label.setText(self._covers_text(bills))
+            self.funding_compare_label.setText("")
+            self.funding_options_box.setVisible(False)
+            self.validate_funding_button.setVisible(False)
+            self.change_funding_button.setVisible(True)
+            self.undo_funding_button.setVisible(True)
+            self.undo_funding_button.setText("Unassign")
             return
 
-        merchant = row["merchant_name"] or row["name"] or "(incoming transfer)"
-        self.funding_selected_label.setText(
-            f"{merchant} · {plaid_amount(actual)}"
+        try:
+            targets = funding_targets(self.database, deposit)
+        except ValueError as exc:
+            targets = []
+            self.funding_state_title.setText("This transfer can't be assigned yet")
+            self.funding_state_detail.setText(str(exc))
+        if not targets:
+            if not self.funding_state_title.text().startswith("This transfer can't"):
+                self.funding_state_title.setText("No bills to cover")
+                self.funding_state_detail.setText(
+                    "No bills in this month are set to be paid from Bills "
+                    "Checking. Set a bill's Payment Account to Bills Checking "
+                    "on the Bills page."
+                )
+            self.funding_options_box.setVisible(False)
+            self.funding_covers_label.setText("")
+            self.funding_compare_label.setText("")
+            self.validate_funding_button.setVisible(False)
+            self.change_funding_button.setVisible(False)
+            self.undo_funding_button.setVisible(self._changing_funding)
+            self.undo_funding_button.setText("Cancel")
+            return
+
+        self.funding_state_title.setText("Which bills does this transfer cover?")
+        self.funding_state_detail.setText(
+            "Pick the group of automatic payments this money was moved to "
+            "cover. The best fit is already selected."
         )
-
-        tx_date = transaction_date(row)
-        if tx_date:
-            self.funding_period_label.setText(
-                f"{MONTH_NAMES[tx_date.month - 1]} {tx_date.year}"
-            )
-
-        saved_scope = row["funding_validation_scope"]
-        scope = str(saved_scope) if saved_scope else suggested_funding_scope(
-            self.database, row
-        )
-        if scope:
-            index = self.funding_scope.findData(scope)
-            if index >= 0:
-                self.funding_scope.blockSignals(True)
-                self.funding_scope.setCurrentIndex(index)
-                self.funding_scope.blockSignals(False)
-
+        self._funding_targets = targets
+        for index, target in enumerate(targets):
+            text = f"{target.label} — needs {money(target.expected_cents)}"
+            if index == 0:
+                text += "  (best match)"
+            button = QRadioButton(text)
+            self.funding_option_group.addButton(button, index)
+            self.funding_options_layout.addWidget(button)
+        self.funding_options_box.setVisible(True)
+        self.validate_funding_button.setVisible(True)
+        self.change_funding_button.setVisible(False)
+        self.undo_funding_button.setVisible(self._changing_funding)
+        self.undo_funding_button.setText("Cancel")
+        self.funding_option_group.button(0).setChecked(True)
         self._update_funding_transfer_preview()
 
+    @staticmethod
+    def _funding_fit_text(difference: int) -> str:
+        if difference == 0:
+            return "exactly enough"
+        if difference > 0:
+            return f"{money(difference)} extra"
+        return f"{money(-difference)} short"
+
+    @staticmethod
+    def _covers_text(bills: list[tuple[str, int]]) -> str:
+        if not bills:
+            return ""
+        return "Covers: " + "  ·  ".join(
+            f"{name} {money(due)}" for name, due in bills
+        )
+
+    def _funding_option_toggled(self, _option_id: int, checked: bool) -> None:
+        if checked:
+            self._update_funding_transfer_preview()
+
+    def _selected_funding_target(self) -> Any | None:
+        index = self.funding_option_group.checkedId()
+        if 0 <= index < len(self._funding_targets):
+            return self._funding_targets[index]
+        return None
+
     def _update_funding_transfer_preview(self) -> None:
-        row = self._selected_row()
-        if row is None:
-            self._clear_funding_transfer_panel(keep_selection=True)
-            return
-
-        scope = self.funding_scope.currentData()
-        if scope is None:
+        deposit = self._funding_row()
+        target = self._selected_funding_target()
+        if deposit is None or target is None:
             self.validate_funding_button.setEnabled(False)
             return
-
-        try:
-            preview = build_funding_transfer_preview(
-                self.database,
-                row,
-                str(scope),
-            )
-        except ValueError as exc:
-            self.funding_expected_value.setText("—")
-            self.funding_actual_value.setText(
-                plaid_amount(int(row["amount_cents"]))
-            )
-            self.funding_difference_value.setText("—")
-            self.funding_warning.setText(str(exc))
-            self.validate_funding_button.setEnabled(False)
-            self.undo_funding_button.setEnabled(
-                row["funding_validation_scope"] is not None
-            )
-            return
-
-        self.funding_expected_value.setText(
-            money(preview.expected_cents)
+        actual = abs(int(deposit["amount_cents"]))
+        self.funding_covers_label.setText(self._covers_text(list(target.bills)))
+        self.funding_compare_label.setText(
+            f"Transferred {money(actual)} · needed {money(target.expected_cents)} "
+            f"({self._funding_fit_text(actual - target.expected_cents)})"
         )
-        self.funding_actual_value.setText(
-            money(preview.actual_cents)
-        )
-        if preview.difference_cents == 0:
-            self.funding_difference_value.setText("$0.00")
-        elif preview.difference_cents > 0:
-            self.funding_difference_value.setText(
-                "+" + money(preview.difference_cents)
-            )
-        else:
-            self.funding_difference_value.setText(
-                "-" + money(abs(preview.difference_cents))
-            )
+        scope_name = "whole month" if target.scope == "month" else f"{target.scope} period bills"
+        self.validate_funding_button.setText(f"Assign to {scope_name}")
+        self.validate_funding_button.setEnabled(True)
 
-        messages = [
-            "Expected is the scheduled total of Transfer Required bills for this scope; "
-            "it does not change when autopays later post."
-        ]
-        if preview.expected_cents == 0:
-            messages.append(
-                "No Transfer Required bills have a scheduled amount in this scope."
-            )
-        elif preview.difference_cents == 0:
-            messages.append(
-                "This bank transfer exactly covers the scheduled aggregate."
-            )
-        elif preview.difference_cents > 0:
-            messages.append(
-                f"The transfer is {money(preview.difference_cents)} over the scheduled aggregate."
-            )
-        else:
-            messages.append(
-                f"The transfer is {money(abs(preview.difference_cents))} short of the scheduled aggregate."
-            )
-
-        if row["funding_validation_scope"] is not None:
-            saved_scope = str(row["funding_validation_scope"])
-            saved_label = (
-                "Whole month"
-                if saved_scope == "month"
-                else f"{saved_scope} pay period"
-            )
-            messages.append(
-                f"Currently validated as {saved_label}: "
-                f"expected {money(int(row['funding_expected_cents']))}, "
-                f"actual {money(int(row['funding_actual_cents']))}, "
-                f"difference {money(int(row['funding_difference_cents']))}."
-            )
-
-        self.funding_warning.setText(" ".join(messages))
-        self.validate_funding_button.setEnabled(
-            not int(row["pending"])
-            and int(row["amount_cents"]) < 0
-            and int(row["is_bills_checking"] or 0)
-            and preview.expected_cents > 0
-        )
-        self.undo_funding_button.setEnabled(
-            row["funding_validation_scope"] is not None
-        )
+    def _start_changing_funding(self) -> None:
+        self._changing_funding = True
+        self.funding_action_status.setText("")
+        self._render_funding_state()
 
     def _validate_funding_transfer(self) -> None:
-        row = self._selected_row()
-        scope = self.funding_scope.currentData()
-        if row is None or scope is None:
+        deposit = self._funding_row()
+        target = self._selected_funding_target()
+        if deposit is None or target is None:
             return
         try:
-            self.backup_manager.create_backup(
-                "pre-funding-transfer-validation"
-            )
-            preview = validate_funding_transfer(
+            self.backup_manager.create_backup("pre-funding-transfer-validation")
+            if deposit["funding_validation_scope"] is not None:
+                undo_funding_transfer_validation(self.database, deposit)
+                deposit = self._funding_row()
+            validate_funding_transfer(
                 self.database,
-                row,
-                str(scope),
+                deposit,
+                target.scope,
+                year=target.year,
+                month=target.month,
             )
         except Exception as exc:
             self.funding_action_status.setText(str(exc))
             return
-
-        if preview.difference_cents == 0:
-            result = "exactly matches"
-        elif preview.difference_cents > 0:
-            result = f"is {money(preview.difference_cents)} over"
-        else:
-            result = f"is {money(abs(preview.difference_cents))} short"
-
-        message = (
-            f"Validated: {money(preview.actual_cents)} {result} the "
-            f"{money(preview.expected_cents)} scheduled transfer target."
-        )
+        self._changing_funding = False
         self.on_data_changed()
         self.refresh()
-        self.funding_action_status.setText(message)
+        self._render_funding_state()
+        self.funding_action_status.setText(
+            f"Assigned to the {target.label.lower()}."
+        )
 
     def _undo_funding_validation(self) -> None:
-        row = self._selected_row()
-        if row is None:
+        if self._changing_funding:
+            self._changing_funding = False
+            self.funding_action_status.setText("")
+            self._render_funding_state()
+            return
+        deposit = self._funding_row()
+        if deposit is None:
             return
         try:
             self.backup_manager.create_backup(
                 "pre-funding-transfer-validation-undo"
             )
-            undo_funding_transfer_validation(self.database, row)
+            undo_funding_transfer_validation(self.database, deposit)
         except Exception as exc:
             self.funding_action_status.setText(str(exc))
             return
-        message = (
-            "Funding transfer validation removed. No bill payment values were changed."
-        )
         self.on_data_changed()
         self.refresh()
-        self.funding_action_status.setText(message)
+        self._render_funding_state()
+        self.funding_action_status.setText(
+            "Unassigned. No bill amounts were changed."
+        )
 
     def _clear_funding_transfer_panel(
         self,
         *,
         keep_selection: bool = False,
     ) -> None:
+        self._clear_funding_options()
+        self._funding_row_id = None
+        self._changing_funding = False
         if not keep_selection:
-            self.funding_selected_label.setText(
-                "Select an incoming transfer deposited into Bills Checking."
-            )
-            self.funding_period_label.setText("")
-        self.funding_expected_value.setText("—")
-        self.funding_actual_value.setText("—")
-        self.funding_difference_value.setText("—")
-        self.funding_warning.setText("")
+            self.funding_selected_label.setText("")
+            self.funding_meta.setText("")
+        self.funding_state_title.setText("")
+        self.funding_state_detail.setText("")
+        self.funding_covers_label.setText("")
+        self.funding_compare_label.setText("")
         self.funding_action_status.setText("")
-        self.validate_funding_button.setEnabled(False)
-        self.undo_funding_button.setEnabled(False)
+        self.validate_funding_button.setVisible(False)
+        self.change_funding_button.setVisible(False)
+        self.undo_funding_button.setVisible(False)
 
     def _duplicate_candidate_count(self, selected_row: Any, suggestion: str) -> int:
         selected_date = transaction_date(selected_row)
