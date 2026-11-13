@@ -37,3 +37,5 @@ workbook/*.ods
 PRODUCTION_ITEM_CREATED.lock
 PRODUCTION_LINK_IN_PROGRESS.lock
 *.egg-info/
+build/
+dist/
