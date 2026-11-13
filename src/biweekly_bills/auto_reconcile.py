@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import dataclass, replace
+import calendar
+from datetime import date, timedelta
 from difflib import SequenceMatcher
 from typing import Any
 
@@ -18,6 +19,14 @@ _MIN_COMBINED_SCORE = 0.89
 _MIN_WINNER_GAP = 0.08
 _INTERNAL_DATE_WINDOW_DAYS = 3
 _NFO_PAYMENT_RECEIVED = "nfo payment received"
+# Bills are often paid a few days before the month they belong to (a "1st"
+# bill paid on the 30th/31st) or a few days late. Payments this close to a
+# month boundary are also compared with the neighbouring month's bills.
+_BOUNDARY_DAYS = 7
+# Ranking-only penalty per day between a payment and the bill's pay-period
+# date, so the nearer month wins when the same bill appears in both.
+_PROXIMITY_PENALTY_PER_DAY = 0.007
+_PROXIMITY_PENALTY_CAP = 0.25
 
 
 @dataclass(frozen=True)
@@ -31,6 +40,9 @@ class AutoMatch:
     confidence: float
     match_kind: str = "merchant"
     evidence_transaction_id: str | None = None
+    # Confidence adjusted for date distance; used only to choose between
+    # competing candidates, never to accept a weak match.
+    rank: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -67,6 +79,99 @@ class _InternalProposal:
     source_row: Any
     destination_row: Any
     match: AutoMatch
+
+
+def _instance_anchor_dates(instance: Any) -> tuple[date, ...]:
+    """Pay-period dates a bill instance belongs to (the 1st and/or 15th)."""
+    try:
+        year = int(instance["year"])
+        month = int(instance["month"])
+    except (KeyError, IndexError, TypeError, ValueError):
+        return ()
+    cycle = str(instance["cycle"] or "")
+    days = {"1st": (1,), "15th": (15,)}.get(cycle, (1, 15))
+    return tuple(date(year, month, day) for day in days)
+
+
+def proximity_penalty(tx_date: date | None, instance: Any) -> float:
+    anchors = _instance_anchor_dates(instance)
+    if tx_date is None or not anchors:
+        return 0.0
+    days = min(abs((tx_date - anchor).days) for anchor in anchors)
+    return min(_PROXIMITY_PENALTY_CAP, days * _PROXIMITY_PENALTY_PER_DAY)
+
+
+def _month_instances(
+    database: Database,
+    year: int,
+    month: int,
+    *,
+    active_only: bool,
+    period_cache: dict[tuple[int, int], list[Any]] | None,
+) -> list[Any]:
+    period = (year, month)
+    if period_cache is not None and period in period_cache:
+        return period_cache[period]
+    instances = database.list_month_instances(
+        year,
+        month,
+        active_only=active_only,
+    )
+    if period_cache is not None:
+        period_cache[period] = instances
+    return instances
+
+
+def candidate_instances(
+    database: Database,
+    tx_date: date,
+    *,
+    active_only: bool = True,
+    period_cache: dict[tuple[int, int], list[Any]] | None = None,
+) -> list[Any]:
+    """Bill instances a payment on ``tx_date`` could belong to.
+
+    Always the transaction's own month. In the last week of a month, also the
+    next month's 1st-period bills (paid early); in the first week, also the
+    previous month's 15th-period bills (paid late).
+    """
+    candidates = list(
+        _month_instances(
+            database,
+            tx_date.year,
+            tx_date.month,
+            active_only=active_only,
+            period_cache=period_cache,
+        )
+    )
+    last_day = calendar.monthrange(tx_date.year, tx_date.month)[1]
+    if tx_date.day > last_day - _BOUNDARY_DAYS:
+        following = tx_date.replace(day=last_day) + timedelta(days=1)
+        candidates.extend(
+            instance
+            for instance in _month_instances(
+                database,
+                following.year,
+                following.month,
+                active_only=active_only,
+                period_cache=period_cache,
+            )
+            if str(instance["cycle"] or "") in {"1st", "Both"}
+        )
+    if tx_date.day <= _BOUNDARY_DAYS:
+        previous = tx_date.replace(day=1) - timedelta(days=1)
+        candidates.extend(
+            instance
+            for instance in _month_instances(
+                database,
+                previous.year,
+                previous.month,
+                active_only=active_only,
+                period_cache=period_cache,
+            )
+            if str(instance["cycle"] or "") in {"15th", "Both"}
+        )
+    return candidates
 
 
 def _row_text(row: Any) -> str:
@@ -701,19 +806,14 @@ def _best_unique_match(
     if tx_date is None:
         return None, False
 
-    period = (tx_date.year, tx_date.month)
-    if period_cache is not None and period in period_cache:
-        candidates = period_cache[period]
-    else:
-        candidates = database.list_month_instances(
-            tx_date.year,
-            tx_date.month,
-            active_only=active_only,
-        )
-        if period_cache is not None:
-            period_cache[period] = candidates
+    candidates = candidate_instances(
+        database,
+        tx_date,
+        active_only=active_only,
+        period_cache=period_cache,
+    )
 
-    scored: list[AutoMatch] = []
+    scored: list[tuple[float, AutoMatch]] = []
     for instance in candidates:
         # A bill already verified by another bank transaction is not available
         # for a second automatic match.
@@ -728,16 +828,17 @@ def _best_unique_match(
             connected_account_names=connected_account_names,
         )
         if match is not None:
-            scored.append(match)
+            rank = match.confidence - proximity_penalty(tx_date, instance)
+            scored.append((rank, replace(match, rank=rank)))
 
     if not scored:
         return None, False
 
-    scored.sort(key=lambda item: item.confidence, reverse=True)
-    best = scored[0]
+    scored.sort(key=lambda item: item[0], reverse=True)
+    best_rank, best = scored[0]
     if len(scored) > 1:
-        runner_up = scored[1]
-        if best.confidence - runner_up.confidence < _MIN_WINNER_GAP:
+        runner_up_rank = scored[1][0]
+        if best_rank - runner_up_rank < _MIN_WINNER_GAP:
             return None, True
     return best, False
 
@@ -809,17 +910,13 @@ def _internal_transfer_proposals(
         )
 
         candidates: list[_InternalProposal] = []
-        period = (destination_date.year, destination_date.month)
-        if period_cache is not None and period in period_cache:
-            instances = period_cache[period]
-        else:
-            instances = database.list_month_instances(
-                destination_date.year,
-                destination_date.month,
-                active_only=active_only,
-            )
-            if period_cache is not None:
-                period_cache[period] = instances
+        ranks: dict[int, float] = {}
+        instances = candidate_instances(
+            database,
+            destination_date,
+            active_only=active_only,
+            period_cache=period_cache,
+        )
 
         for instance in instances:
             if int(instance["bank_verified"] or 0):
@@ -882,6 +979,10 @@ def _internal_transfer_proposals(
                         + amount_score * 0.25
                         + date_score * 0.10
                     )
+                ranks[len(candidates)] = confidence - proximity_penalty(
+                    destination_date,
+                    instance,
+                )
                 candidates.append(
                     _InternalProposal(
                         source_row=source,
@@ -907,16 +1008,13 @@ def _internal_transfer_proposals(
         if len(candidates) == 1:
             proposals.append(candidates[0])
         elif len(candidates) > 1:
-            candidates.sort(
-                key=lambda proposal: proposal.match.confidence,
+            ranked = sorted(
+                range(len(candidates)),
+                key=lambda index: ranks[index],
                 reverse=True,
             )
-            if (
-                candidates[0].match.confidence
-                - candidates[1].match.confidence
-                >= _MIN_WINNER_GAP
-            ):
-                proposals.append(candidates[0])
+            if ranks[ranked[0]] - ranks[ranked[1]] >= _MIN_WINNER_GAP:
+                proposals.append(candidates[ranked[0]])
             else:
                 ambiguous_destinations.add(
                     str(destination["plaid_transaction_id"])
@@ -1091,6 +1189,13 @@ def _auto_reconcile(
     for competing in by_bill.values():
         if len(competing) == 1:
             accepted.append(competing[0])
+            continue
+        # Several payments look like the same bill: take the one clearly
+        # nearest the bill's pay period, otherwise leave all for review.
+        competing.sort(key=lambda proposal: proposal.match.rank, reverse=True)
+        if competing[0].match.rank - competing[1].match.rank >= _MIN_WINNER_GAP:
+            accepted.append(competing[0])
+            review += len(competing) - 1
         else:
             review += len(competing)
 
