@@ -97,7 +97,7 @@ class PayPeriodLayoutTests(unittest.TestCase):
             self.assertNotIn("Inactive Bill", page.table.item(0, 1).text())
             self.assertEqual(page.workflow_progress.maximum(), 1)
             self.assertEqual(page.workflow_progress.value(), 0)
-            self.assertIn("0 of 1 handled", page.workflow_summary.text())
+            self.assertIn("0 of 1 paid", page.workflow_summary.text())
 
             page.close()
 
@@ -141,6 +141,8 @@ class PayPeriodLayoutTests(unittest.TestCase):
             self.assertEqual(page.table.columnCount(), 11)
             self.assertEqual(page.table.rowCount(), 1)
 
+            # Workbook-only columns are hidden by default; show them to edit.
+            page.more_columns.setChecked(True)
             page.table.selectRow(0)
             self.app.processEvents()
 
@@ -192,6 +194,78 @@ class PayPeriodLayoutTests(unittest.TestCase):
             self.assertEqual(page.selected_instance_id, instance_id)
             self.assertIn("saved", page.workflow_status.text().casefold())
 
+            page.close()
+
+
+class MarkPaidTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def _db(self, temp_dir):
+        db = Database(Path(temp_dir) / "bills.sqlite3")
+        db.initialize()
+        bill_id = db.upsert_bill(name="Power", cycle="1st", active=True)
+        instance_id = db.upsert_bill_instance(
+            year=2026,
+            month=9,
+            cycle="1st",
+            bill_name="Power",
+            bill_id=bill_id,
+            due_cents=12000,
+            status="Due",
+        )
+        return db, instance_id
+
+    def test_mark_paid_fills_amount_and_untick_restores(self):
+        with TemporaryDirectory() as temp_dir:
+            db, instance_id = self._db(temp_dir)
+            db.mark_bill_paid(instance_id, True)
+            row = db.get_bill_instance(instance_id)
+            self.assertEqual(row["paid_cents"], 12000)
+            self.assertEqual(row["status"], "Paid")
+            self.assertEqual(int(row["manually_paid"]), 1)
+
+            db.mark_bill_paid(instance_id, False)
+            row = db.get_bill_instance(instance_id)
+            self.assertIsNone(row["paid_cents"])
+            self.assertEqual(row["status"], "Unpaid")
+            self.assertEqual(int(row["manually_paid"]), 0)
+
+    def test_mark_paid_keeps_an_amount_already_entered(self):
+        with TemporaryDirectory() as temp_dir:
+            db, instance_id = self._db(temp_dir)
+            row = db.get_bill_instance(instance_id)
+            db.update_bill_instance(
+                instance_id,
+                when_label=None,
+                due_cents=12000,
+                paid_cents=11850,
+                method=None,
+                status="Due",
+                extra_short=None,
+            )
+            db.mark_bill_paid(instance_id, True)
+            self.assertEqual(db.get_bill_instance(instance_id)["paid_cents"], 11850)
+
+    def test_next_to_pay_button_marks_first_unpaid_bill(self):
+        with TemporaryDirectory() as temp_dir:
+            db, instance_id = self._db(temp_dir)
+            backups = BackupManager(db, backup_dir=Path(temp_dir) / "backups")
+            page = PayPeriodsPage(db, lambda: None, backups)
+            page.show()
+            page.month.setCurrentIndex(8)
+            page.year.setCurrentText("2026")
+            page.set_view("1st")
+            self.app.processEvents()
+
+            self.assertIn("Power", page.next_label.text())
+            page.next_button.click()
+            self.app.processEvents()
+
+            self.assertEqual(db.get_bill_instance(instance_id)["paid_cents"], 12000)
+            self.assertIn("Marked Power paid", page.workflow_status.text())
+            self.assertIn("All set", page.next_label.text())
             page.close()
 
 

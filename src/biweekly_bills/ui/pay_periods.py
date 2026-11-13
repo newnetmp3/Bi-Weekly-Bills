@@ -94,53 +94,73 @@ def bank_status_text(
     return "Waiting for bank"
 
 
+def bill_state_text(row, *, today: date | None = None) -> str:
+    """One plain-language status combining the Paid tick, Status and bank."""
+    if int(row["bank_verified"] or 0):
+        return "✓ Paid · confirmed by bank"
+    status = str(row["status"] or "").strip().casefold()
+    due = int(row["due_cents"] or 0)
+    manually_paid = bool(int(row["manually_paid"] or 0))
+    current = today or date.today()
+    past = (int(row["year"]), int(row["month"])) < (current.year, current.month)
+    if manually_paid or status == "paid":
+        return "Paid · not found at bank" if past else "Paid · waiting for bank"
+    if status in {"no payment due", "skip", "skipped"} or (
+        due <= 0 and not int(row["paid_cents"] or 0)
+    ):
+        return "No payment due"
+    if status == "autopay" or str(row["method"] or "").strip().casefold() == "autopay":
+        return "Autopay · not seen yet" if past else "Autopay · waiting for bank"
+    return "Not paid yet" if past else "To pay"
+
+
+def needs_action(row) -> bool:
+    return bill_state_text(row) in {"To pay", "Not paid yet"}
+
+
 def verification_provenance_text(
     row,
     *,
     today: date | None = None,
 ) -> str:
+    """Plain-language explanation of where a bill's status comes from."""
+    name = str(row["bill_name_snapshot"] or "This bill")
     if int(row["bank_verified"] or 0):
         description = str(
-            row["bank_verified_description"]
-            or "posted bank transaction"
+            row["bank_verified_description"] or "a bank payment"
         )
-        verified_date = str(row["bank_verified_date"] or "unknown date")
-        account = str(
-            row["bank_verified_account_name"]
-            or "linked account"
-        )
+        verified_date = str(row["bank_verified_date"] or "an unknown date")
+        account = str(row["bank_verified_account_name"] or "your account")
         mask = str(row["bank_verified_account_mask"] or "")
         if mask:
             account += f" ••••{mask}"
-
+        text = (
+            f"{name}: confirmed by your bank — \"{description}\" on "
+            f"{verified_date} from {account}."
+        )
         evidence = row["bank_evidence_account_name"]
         if evidence:
             evidence_label = str(evidence)
             evidence_mask = str(row["bank_evidence_account_mask"] or "")
             if evidence_mask:
                 evidence_label += f" ••••{evidence_mask}"
-            return (
-                f"Verified by {description} on {verified_date} from {account}; "
-                f"paired receipt evidence is on {evidence_label}."
-            )
-        return (
-            f"Verified by {description} on {verified_date} from {account}."
-        )
+            text += f" The payment also shows as received on {evidence_label}."
+        return text
 
     manually_paid = bool(int(row["manually_paid"] or 0))
     current = today or date.today()
     period = (int(row["year"]), int(row["month"]))
     if manually_paid and period < (current.year, current.month):
         return (
-            "Paid checkpoint is recorded, but no posted bank transaction "
-            "has been reconciled to this historical bill instance."
+            f"{name}: marked paid, but no matching bank payment was found. "
+            "Check Transactions, or use Re-check matches there."
         )
     if manually_paid:
         return (
-            "Paid checkpoint is recorded; waiting for a posted bank "
-            "transaction to reconcile."
+            f"{name}: marked paid. It will be confirmed automatically when "
+            "the payment shows up at your bank."
         )
-    return "No bank reconciliation is recorded for this bill instance."
+    return f"{name}: not marked paid yet."
 
 
 class PayPeriodsPage(QWidget):
@@ -233,7 +253,7 @@ class PayPeriodsPage(QWidget):
             selector_row.addWidget(button)
 
         selector_row.addStretch(1)
-        self.unfinished_only = QCheckBox("Show unfinished only")
+        self.unfinished_only = QCheckBox("Show only bills to pay")
         self.unfinished_only.stateChanged.connect(self.refresh)
         selector_row.addWidget(self.unfinished_only)
         root.addLayout(selector_row)
@@ -259,9 +279,27 @@ class PayPeriodsPage(QWidget):
         self.workflow_progress.setMinimumWidth(260)
         workflow_layout.addWidget(self.workflow_progress, 2)
 
+        next_box = QVBoxLayout()
+        next_box.setSpacing(4)
+        next_row = QHBoxLayout()
+        self.next_label = QLabel("")
+        self.next_label.setWordWrap(True)
+        self.next_button = QPushButton("Mark paid")
+        self.next_button.setObjectName("PrimaryButton")
+        self.next_button.setToolTip(
+            "Record that you paid this bill. The amount due is used as the "
+            "paid amount if you have not entered one."
+        )
+        self.next_button.clicked.connect(self._mark_next_paid)
+        next_row.addWidget(self.next_label, 1)
+        next_row.addWidget(self.next_button)
+        next_box.addLayout(next_row)
         self.workflow_status = QLabel("")
         self.workflow_status.setObjectName("Muted")
-        workflow_layout.addWidget(self.workflow_status, 2)
+        self.workflow_status.setWordWrap(True)
+        next_box.addWidget(self.workflow_status)
+        workflow_layout.addLayout(next_box, 3)
+        self._next_instance_id: int | None = None
         root.addWidget(self.workflow_card)
 
         self.funding_card = QFrame()
@@ -321,7 +359,7 @@ class PayPeriodsPage(QWidget):
         self.table_title = QLabel("")
         self.table_title.setObjectName("SectionTitle")
         table_note = QLabel(
-            "Check Paid as you handle a bill. Bank verification stays separate."
+            "Tick Paid when you pay a bill. Your bank confirms it after the next sync."
         )
         table_note.setObjectName("Muted")
         table_header.addWidget(self.table_title)
@@ -332,7 +370,7 @@ class PayPeriodsPage(QWidget):
         self.table = QTableWidget(0, 11)
         self.table.setHorizontalHeaderLabels(
             [
-                "Paid ✓",
+                "Paid",
                 "Bill",
                 "Cycle",
                 "When",
@@ -340,8 +378,8 @@ class PayPeriodsPage(QWidget):
                 "Paid amount",
                 "Method",
                 "Payment account",
-                "Bank status",
                 "Status",
+                "Workbook status",
                 "Extra / Short",
             ]
         )
@@ -359,20 +397,23 @@ class PayPeriodsPage(QWidget):
         configure_resizable_columns(
             self.table,
             (
-                80,   # Paid ✓
-                240,  # Bill
-                90,   # Cycle
-                115,  # When
-                110,  # Due
-                125,  # Paid amount
-                145,  # Method
-                210,  # Payment account
-                170,  # Bank status
-                130,  # Status
+                64,   # Paid
+                200,  # Bill
+                80,   # Cycle
+                100,  # When
+                100,  # Due
+                110,  # Paid amount
+                118,  # Method
+                180,  # Payment account
+                200,  # Status (plain language)
+                130,  # Workbook status
                 120,  # Extra / Short
             ),
         )
         set_sortable(self.table)
+        # Show the plain-language Status right after the bill name. This is a
+        # visual move only; column numbers used in code stay the same.
+        self.table.horizontalHeader().moveSection(8, 2)
         self.table.setContextMenuPolicy(
             Qt.ContextMenuPolicy.CustomContextMenu
         )
@@ -389,14 +430,23 @@ class PayPeriodsPage(QWidget):
         table_layout.addWidget(self.table)
         root.addWidget(table_card, 1)
 
+        footer = QHBoxLayout()
         inline_note = QLabel(
-            "Select a row to edit When, Due, Paid amount, Method, Status, "
-            "or Extra / Short directly in the table. Changes save when "
-            "the cell edit is committed."
+            "Click a bill to change its date, amounts or method right in the "
+            "table. Changes save as soon as you leave the cell."
         )
         inline_note.setObjectName("Muted")
         inline_note.setWordWrap(True)
-        root.addWidget(inline_note)
+        footer.addWidget(inline_note, 1)
+        self.more_columns = QCheckBox("Show workbook columns")
+        self.more_columns.setToolTip(
+            "Show the Workbook status and Extra / Short columns imported "
+            "from the old spreadsheet."
+        )
+        self.more_columns.toggled.connect(self._apply_column_visibility)
+        footer.addWidget(self.more_columns)
+        root.addLayout(footer)
+        self._apply_column_visibility()
         root.addStretch(1)
 
         self._load_years()
@@ -484,13 +534,13 @@ class PayPeriodsPage(QWidget):
             f"{MONTH_NAMES[month - 1]} {year} · {view_label}"
         )
         self.workflow_summary.setText(
-            f"{progress.handled_count} of {progress.bill_count} handled · "
-            f"{remaining} remaining · {progress.bank_verified_count} bank verified"
+            f"{progress.handled_count} of {progress.bill_count} paid · "
+            f"{remaining} left · {progress.bank_verified_count} confirmed by bank"
         )
         self.workflow_progress.setMaximum(max(progress.bill_count, 1))
         self.workflow_progress.setValue(progress.handled_count)
         self.workflow_progress.setFormat(
-            f"{progress.handled_count} / {progress.bill_count} handled"
+            f"{progress.handled_count} / {progress.bill_count} paid"
             if progress.bill_count
             else "No bills"
         )
@@ -500,6 +550,7 @@ class PayPeriodsPage(QWidget):
         )
 
         self._refresh_funding(year, month)
+        self._refresh_next_up(year, month)
 
         if previous_selection is not None:
             self._restore_selection(previous_selection)
@@ -573,15 +624,75 @@ class PayPeriodsPage(QWidget):
             year, month, self.current_view, active_only=True
         )
 
+    def _apply_column_visibility(self, *_args) -> None:
+        show = self.more_columns.isChecked()
+        self.table.setColumnHidden(9, not show)
+        self.table.setColumnHidden(10, not show)
+
+    def _refresh_next_up(self, year: int, month: int) -> None:
+        rows = self._rows_for_view(year, month)
+        pending = [row for row in rows if needs_action(row)]
+        if not rows:
+            self._next_instance_id = None
+            self.next_label.setText("No bills in this list.")
+            self.next_button.setVisible(False)
+            return
+        if not pending:
+            self._next_instance_id = None
+            self.next_label.setText(
+                "<b>All set.</b> Every bill in this list is paid, on autopay, "
+                "or has nothing due."
+            )
+            self.next_button.setVisible(False)
+            return
+        row = pending[0]
+        self._next_instance_id = int(row["id"])
+        account = row["payment_account_name"] or row["payment_account_snapshot"] or ""
+        if row["payment_account_name"] and row["payment_account_mask"]:
+            account = f"{account} ••••{row['payment_account_mask']}"
+        detail = money(row["due_cents"])
+        if row["when_label"]:
+            detail += f" · due {row['when_label']}"
+        if account:
+            detail += f" · from {account}"
+        more = f" ({len(pending) - 1} more after this)" if len(pending) > 1 else ""
+        self.next_label.setText(
+            f"<b>Next to pay:</b> {row['bill_name_snapshot']}<br>"
+            f"<span style='color:#9aa4b2'>{detail}{more}</span>"
+        )
+        self.next_button.setVisible(True)
+
+    def _mark_next_paid(self) -> None:
+        if self._next_instance_id is None:
+            return
+        self._mark_paid(self._next_instance_id, True)
+
+    def _mark_paid(self, instance_id: int, paid: bool) -> None:
+        try:
+            self.database.mark_bill_paid(instance_id, paid)
+        except Exception as exc:
+            self.workflow_status.setText(f"Could not save: {exc}")
+            self.refresh()
+            return
+        row = self.database.get_bill_instance(instance_id)
+        name = str(row["bill_name_snapshot"]) if row is not None else "Bill"
+        self.selected_instance_id = instance_id
+        self.on_changed()
+        self.refresh()
+        # Set after refresh: restoring the selection rewrites this label.
+        if paid:
+            amount = money(row["paid_cents"]) if row is not None else ""
+            self.workflow_status.setText(
+                f"Marked {name} paid ({amount}). Your bank will confirm it "
+                "after the next sync."
+            )
+        else:
+            self.workflow_status.setText(f"Marked {name} as not paid.")
+
     def _fill_table(self, year: int, month: int) -> None:
         rows = self._rows_for_view(year, month)
         if self.unfinished_only.isChecked():
-            rows = [
-                row
-                for row in rows
-                if not int(row["manually_paid"] or 0)
-                and not int(row["bank_verified"] or 0)
-            ]
+            rows = [row for row in rows if needs_action(row)]
 
         self.table_title.setText(
             {
@@ -603,7 +714,7 @@ class PayPeriodsPage(QWidget):
                 manually_paid = bool(int(row["manually_paid"] or 0))
                 bank_verified = bool(int(row["bank_verified"] or 0))
                 handled = manually_paid or bank_verified
-                resume_here = not handled and not resume_marked
+                resume_here = needs_action(row) and not resume_marked
                 if resume_here:
                     resume_marked = True
 
@@ -622,12 +733,7 @@ class PayPeriodsPage(QWidget):
                         f"••••{row['payment_account_mask']}"
                     )
 
-                bank_status = bank_status_text(
-                    manually_paid=manually_paid,
-                    bank_verified=bank_verified,
-                    year=year,
-                    month=month,
-                )
+                bank_status = bill_state_text(row)
                 bill_display = str(row["bill_name_snapshot"])
                 if resume_here:
                     bill_display = f"→ {bill_display}"
@@ -698,8 +804,8 @@ class PayPeriodsPage(QWidget):
                             Qt.AlignmentFlag.AlignCenter
                         )
                         item.setToolTip(
-                            "Manual checkpoint only. It does not change "
-                            "the Paid amount or bank reconciliation."
+                            "Tick when you have paid this bill. If no paid "
+                            "amount is entered, the amount due is used."
                         )
                     else:
                         item.setFlags(base_flags)
@@ -728,6 +834,10 @@ class PayPeriodsPage(QWidget):
                         )
                         if bank_verified:
                             item.setForeground(QColor("#c8ff3d"))
+                        elif bank_status in {"To pay", "Not paid yet"}:
+                            item.setForeground(QColor("#ffd166"))
+                        elif bank_status == "Paid · not found at bank":
+                            item.setForeground(QColor("#ff9f7a"))
 
                     self.table.setItem(row_index, col, item)
         finally:
@@ -974,30 +1084,10 @@ class PayPeriodsPage(QWidget):
         if raw_id is None:
             return
 
-        instance_id = int(raw_id)
-        manually_paid = (
-            item.checkState() == Qt.CheckState.Checked
+        self._mark_paid(
+            int(raw_id),
+            item.checkState() == Qt.CheckState.Checked,
         )
-        try:
-            self.database.set_bill_manually_paid(
-                instance_id,
-                manually_paid,
-            )
-        except Exception as exc:
-            self.workflow_status.setText(
-                f"Could not update manual Paid checkpoint: {exc}"
-            )
-            self.refresh()
-            return
-
-        self.selected_instance_id = instance_id
-        self.workflow_status.setText(
-            "Paid checkpoint saved."
-            if manually_paid
-            else "Paid checkpoint cleared."
-        )
-        self.on_changed()
-        self.refresh()
 
     def _restore_selection(self, instance_id: int) -> None:
         for row in range(self.table.rowCount()):

@@ -1549,6 +1549,63 @@ class Database:
             if cursor.rowcount != 1:
                 raise ValueError(f"Bill instance {instance_id} was not found.")
 
+    def mark_bill_paid(self, instance_id: int, paid: bool) -> None:
+        """One-click "I paid this" toggle used by the pay checklist.
+
+        Ticking records the Paid checkpoint and, when no Paid amount was
+        entered yet, fills it from the Due amount and sets Status to Paid, so
+        remaining-to-pay totals drop immediately. Unticking reverses only what
+        ticking would have filled, and never touches a bank-confirmed bill's
+        amount or status.
+        """
+        now = utc_now()
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM bill_instances WHERE id=?",
+                (instance_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Bill instance {instance_id} was not found.")
+            bank_confirmed = conn.execute(
+                """
+                SELECT 1 FROM transaction_reconciliations
+                WHERE disposition='matched' AND bill_instance_id=?
+                LIMIT 1
+                """,
+                (instance_id,),
+            ).fetchone() is not None
+
+            due = row["due_cents"]
+            paid_cents = row["paid_cents"]
+            status = row["status"]
+            if paid and not bank_confirmed:
+                if (paid_cents is None or int(paid_cents) == 0) and due:
+                    paid_cents = int(due)
+                if int(paid_cents or 0) > 0:
+                    status = "Paid"
+            elif not paid and not bank_confirmed:
+                if str(status or "").strip().casefold() == "paid":
+                    status = "Unpaid"
+                    if paid_cents is not None and due is not None and int(paid_cents) == int(due):
+                        paid_cents = None
+
+            conn.execute(
+                """
+                UPDATE bill_instances
+                SET manually_paid=?, manually_paid_at=?,
+                    paid_cents=?, status=?, updated_at=?
+                WHERE id=?
+                """,
+                (
+                    int(paid),
+                    now if paid else None,
+                    paid_cents,
+                    status,
+                    now,
+                    instance_id,
+                ),
+            )
+
     def available_years(self) -> list[int]:
         with self.connection() as conn:
             rows = conn.execute(
