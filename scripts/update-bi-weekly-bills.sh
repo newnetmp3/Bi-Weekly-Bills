@@ -19,13 +19,16 @@
 #   update-bi-weekly-bills.sh --wheel FILE.whl     # a wheel you downloaded
 #   update-bi-weekly-bills.sh --source DIR         # a local Git checkout
 #   update-bi-weekly-bills.sh --venv DIR           # app environment location
+#   update-bi-weekly-bills.sh --dry-run            # show what would happen; change nothing
 #
 # Without --venv, the existing install is found from the biweekly-bills-app
 # command (normally ~/.local/bin/biweekly-bills-app):
 #   * a virtual environment or pipx install is updated in place;
-#   * a "pip install --user" install is moved into a private environment at
+#   * a "pip install --user" install, or a hand-written launcher script that
+#     sets PYTHONPATH, is moved into a private environment at
 #     ~/.local/opt/bi-weekly-bills, and ~/.local/bin/biweekly-bills-app is
-#     pointed at it, so the menu entry and command keep working.
+#     pointed at it (the old launcher is kept as a backup), so the menu entry
+#     and command keep working. The old files are left untouched.
 
 set -euo pipefail
 
@@ -33,7 +36,10 @@ REPO="newnetmp3/Bi-Weekly-Bills"
 VENV=""
 DEFAULT_VENV="${HOME}/.local/opt/bi-weekly-bills"
 USER_BIN="${HOME}/.local/bin"
-USER_SITE_INSTALL=0
+MOVE_INSTALL=0
+MOVE_REASON=""
+LEGACY_ROOTS=()
+DRY_RUN=0
 WHEEL=""
 SOURCE=""
 CONFIG_DIR="${HOME}/.config/bi-weekly-bills"
@@ -48,7 +54,8 @@ while [ $# -gt 0 ]; do
     --wheel) WHEEL="$(realpath "${2:?--wheel needs a file}")"; shift 2 ;;
     --source) SOURCE="$(realpath "${2:?--source needs a folder}")"; shift 2 ;;
     --venv) VENV="${2:?--venv needs a folder}"; shift 2 ;;
-    -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
     *) fail "unknown option: $1 (try --help)" ;;
   esac
 done
@@ -95,19 +102,71 @@ if [ -z "$VENV" ]; then
       SHEBANG_PY="$(sed -n '2p' "$REAL_LAUNCHER" | sed "s/^'''exec' *//" | awk '{print $1}' | tr -d '"')"
     fi
     CANDIDATE="$(dirname "$(dirname "$SHEBANG_PY")")"
+    case "$(basename "${SHEBANG_PY:-x}")" in
+      bash|sh|dash|zsh|env) IS_WRAPPER=1 ;;
+      *) IS_WRAPPER=0 ;;
+    esac
     if [ -n "$SHEBANG_PY" ] && [ -f "$CANDIDATE/pyvenv.cfg" ]; then
       VENV="$CANDIDATE"
       echo "Found existing install: $LAUNCHER -> environment $VENV"
-    else
-      USER_SITE_INSTALL=1
+    elif [ "$IS_WRAPPER" = 1 ]; then
+      # Hand-written launcher. Find the folder(s) it loads the app from, e.g.
+      #   export PYTHONPATH="$HOME/.local/opt/biweekly-bills..."
+      # Version 1.0 kept its state one level above the folder that contains
+      # the biweekly_bills package, so both are searched.
+      while IFS= read -r raw; do
+        dir="${raw//\$\{HOME\}/$HOME}"; dir="${dir//\$HOME/$HOME}"; dir="${dir/#\~/$HOME}"
+        if [ -d "$dir/biweekly_bills" ]; then
+          LEGACY_ROOTS+=("$dir" "$(dirname "$dir")")
+        fi
+      done < <(grep -oE '(\$\{HOME\}|\$HOME|~|/)[^":;$ ]*' "$REAL_LAUNCHER" | sort -u)
+      MOVE_INSTALL=1
+      MOVE_REASON="hand-written launcher script"
       VENV="$DEFAULT_VENV"
-      echo "Found existing install: $LAUNCHER (installed with pip --user)"
+      echo "Found existing install: $LAUNCHER ($MOVE_REASON)"
+      if [ ${#LEGACY_ROOTS[@]} -gt 0 ]; then
+        echo "  it loads the app from: ${LEGACY_ROOTS[0]}"
+      else
+        echo "  could not tell which folder it loads the app from"
+      fi
+      echo "It will be moved into its own environment at $VENV."
+    else
+      MOVE_INSTALL=1
+      MOVE_REASON="installed with pip --user"
+      VENV="$DEFAULT_VENV"
+      echo "Found existing install: $LAUNCHER ($MOVE_REASON)"
       echo "It will be moved into its own environment at $VENV."
     fi
   else
     VENV="$DEFAULT_VENV"
     echo "No existing biweekly-bills-app command found; using $VENV"
   fi
+fi
+
+if [ "$DRY_RUN" = 1 ]; then
+  echo
+  echo "Dry run: nothing will be changed."
+  echo "  Install into: $VENV"
+  [ "$MOVE_INSTALL" = 1 ] && echo "  Then point $USER_BIN/biweekly-bills-app and biweekly-bills there (old files kept as backups)"
+  echo "  1.0 state files that would be carried over:"
+  found=0
+  roots=("$VENV"/lib/python3*)
+  [ "$MOVE_INSTALL" = 1 ] && roots+=("${HOME}"/.local/lib/python3*)
+  roots+=("${LEGACY_ROOTS[@]}")
+  [ -n "$SOURCE" ] && roots+=("$SOURCE")
+  for root in "${roots[@]}"; do
+    [ -d "$root" ] || continue
+    for f in "$root"/PRODUCTION_ITEM_CREATED.lock "$root"/.env "$root"/data/local_config*.json "$root"/data/transactions*.json; do
+      [ -f "$f" ] && { echo "    $f"; found=1; }
+    done
+  done
+  [ "$found" = 1 ] || echo "    (none found)"
+  if [ -f "$CONFIG_DIR/plaid_item_production.json" ]; then
+    echo "  Saved bank connection: $CONFIG_DIR/plaid_item_production.json (kept as-is)"
+  else
+    echo "  Saved bank connection: not found in $CONFIG_DIR"
+  fi
+  exit 0
 fi
 
 STAMP="$(date -u +%Y%m%dT%H%M%S)"
@@ -165,10 +224,11 @@ collect_legacy() {
   done
 }
 for libdir in "$VENV"/lib/python3*; do collect_legacy "$libdir"; done
-if [ "$USER_SITE_INSTALL" = 1 ]; then
+if [ "$MOVE_INSTALL" = 1 ]; then
   # 1.0 installed with pip --user kept its state in ~/.local/lib/python3.X
   for libdir in "${HOME}"/.local/lib/python3*; do collect_legacy "$libdir"; done
 fi
+for root in "${LEGACY_ROOTS[@]}"; do collect_legacy "$root"; done
 [ -n "$SOURCE" ] && collect_legacy "$SOURCE"
 
 # --- 4. Install ---------------------------------------------------------------
@@ -224,7 +284,7 @@ else
 fi
 
 # --- 5. Carry state forward and verify ---------------------------------------
-if [ "$USER_SITE_INSTALL" = 1 ]; then
+if [ "$MOVE_INSTALL" = 1 ]; then
   say "Pointing $USER_BIN at the new environment"
   mkdir -p "$USER_BIN"
   for cmd in biweekly-bills-app biweekly-bills; do
