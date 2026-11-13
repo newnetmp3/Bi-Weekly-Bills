@@ -53,6 +53,7 @@ from ..reconciliation import (
     undo_reconciliation,
 )
 from ..settings import load_settings
+from .formatting import relative_time
 from .context_menu import (
     begin_table_context_menu,
     copy_text,
@@ -1028,7 +1029,7 @@ class TransactionsPage(QWidget):
         self.summary.setText(
             f"{len(filtered)} shown · {len(self._rows)} loaded for {scope}"
             + (
-                f" · last sync {last_sync}"
+                f" · last synced {relative_time(last_sync)}"
                 if last_sync
                 else " · not synced yet"
             )

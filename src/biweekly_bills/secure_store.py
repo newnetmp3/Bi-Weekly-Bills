@@ -7,7 +7,9 @@ from pathlib import Path
 import tempfile
 from typing import Any
 
-APP_DIR = Path.home() / ".config" / "bi-weekly-bills"
+from .paths import user_config_dir
+
+APP_DIR = user_config_dir()
 LEGACY_CREDENTIALS_PATH = APP_DIR / "plaid_item.json"
 PENDING_PRODUCTION_PATH = APP_DIR / "plaid_item_production.pending.json"
 

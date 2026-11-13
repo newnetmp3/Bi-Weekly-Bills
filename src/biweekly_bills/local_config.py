@@ -5,8 +5,11 @@ import os
 from pathlib import Path
 from typing import Any
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = PROJECT_ROOT / "data"
+from .paths import user_state_dir
+
+# Kept in the user's config folder so reinstalling or upgrading the app never
+# loses the transaction cursor or the Bills Checking choice.
+DATA_DIR = user_state_dir()
 LEGACY_CONFIG_PATH = DATA_DIR / "local_config.json"
 
 

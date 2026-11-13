@@ -7,10 +7,12 @@ from pathlib import Path
 import re
 import tempfile
 
-from .settings import PROJECT_ROOT
+from .paths import user_state_dir
 
-PRODUCTION_LOCK = PROJECT_ROOT / "PRODUCTION_ITEM_CREATED.lock"
-PRODUCTION_LINK_SESSION_LOCK = PROJECT_ROOT / "PRODUCTION_LINK_IN_PROGRESS.lock"
+# Stored with the user's config, not the install folder, so the one-Item lock
+# survives reinstalls and upgrades.
+PRODUCTION_LOCK = user_state_dir() / "PRODUCTION_ITEM_CREATED.lock"
+PRODUCTION_LINK_SESSION_LOCK = user_state_dir() / "PRODUCTION_LINK_IN_PROGRESS.lock"
 
 _ITEM_LINE = re.compile(r"^Item ID:\s*(?P<item>.+?)\s*$", re.MULTILINE)
 
@@ -71,6 +73,7 @@ def mark_production_item_created(item_id: str) -> Path:
     )
 
     PRODUCTION_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(PRODUCTION_LOCK.parent, 0o700)
     fd, temp_name = tempfile.mkstemp(
         prefix=".production-item-lock.",
         suffix=".tmp",
@@ -118,6 +121,7 @@ def acquire_initial_link_session() -> Path:
         f"Started at: {datetime.now().astimezone().isoformat()}\n"
     )
 
+    PRODUCTION_LINK_SESSION_LOCK.parent.mkdir(parents=True, exist_ok=True)
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
     fd = os.open(PRODUCTION_LINK_SESSION_LOCK, flags, 0o600)
     try:

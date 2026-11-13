@@ -54,6 +54,7 @@ from .secure_store import (
     require_access_token,
     save_credentials,
 )
+from .paths import migrate_legacy_state, user_state_dir
 from .settings import PROJECT_ROOT, load_settings
 from .self_test import run_self_test
 from .transactions import apply_sync
@@ -64,7 +65,7 @@ from .workbook_sync import (
     plan_workbook_changes,
 )
 
-DATA_DIR = PROJECT_ROOT / "data"
+DATA_DIR = user_state_dir()
 LEGACY_TRANSACTIONS_CACHE = DATA_DIR / "transactions.json"
 
 
@@ -188,7 +189,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     creds = load_credentials(settings.environment)
     pending = load_pending_production_exchange()
 
-    print(f"Project root: {PROJECT_ROOT}")
+    print(f"Install folder: {PROJECT_ROOT}")
+    print(f"Sync state folder: {user_state_dir()}")
     print(f"Plaid environment: {settings.environment}")
     print(f"Plaid Client ID configured: {'yes' if settings.client_id else 'no'}")
     print(f"Plaid Secret configured: {'yes' if settings.secret else 'no'}")
@@ -560,6 +562,51 @@ def cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_migrate_state(args: argparse.Namespace) -> int:
+    source = Path(args.source).expanduser() if args.source else None
+    report = migrate_legacy_state(source, force=True)
+    print(f"Checked old install folder: {report.source}")
+    for name in report.copied:
+        print(f"  copied {name}")
+    for name in report.skipped_existing:
+        print(f"  kept existing (already migrated) {name}")
+    if report.imported_api_keys:
+        print("  imported Plaid API keys from .env")
+    if not report.changed:
+        print("  nothing new to copy")
+    print(f"Sync state folder: {user_state_dir()}")
+    return 0
+
+
+def cmd_verify_update(args: argparse.Namespace) -> int:
+    from .update_support import verify_update
+
+    result = verify_update(args.expect_item or None)
+    for line in result.lines:
+        print(line)
+    return 0 if result.ok else 2
+
+
+def cmd_connection_item(args: argparse.Namespace) -> int:
+    """Print the saved Production Item ID (not a secret) for update scripts."""
+    item_id = str(load_credentials("production").get("item_id") or "").strip()
+    if item_id:
+        print(item_id)
+    return 0
+
+
+def cmd_backup(args: argparse.Namespace) -> int:
+    from .backups import BackupManager
+
+    path = default_database_path()
+    if not path.exists():
+        print(f"No database at {path}; nothing to back up.")
+        return 0
+    info = BackupManager(Database(path)).create_backup(args.reason)
+    print(f"Verified backup: {info.path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="biweekly-bills",
@@ -569,6 +616,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("doctor", help="Check local configuration and Trial safety state.")
     p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser(
+        "verify-update",
+        help="Confirm after an update that the existing bank connection carried over (offline; never opens Link).",
+    )
+    p.add_argument("--expect-item", help="Item ID recorded before the update.")
+    p.set_defaults(func=cmd_verify_update)
+
+    p = sub.add_parser(
+        "migrate-state",
+        help="Copy connection state from an older install folder into ~/.config/bi-weekly-bills/state.",
+    )
+    p.add_argument(
+        "--from",
+        dest="source",
+        help="Old install or checkout folder (defaults to this install's own folder).",
+    )
+    p.set_defaults(func=cmd_migrate_state)
+
+    p = sub.add_parser("connection-item", help="Print the saved bank connection Item ID.")
+    p.set_defaults(func=cmd_connection_item)
+
+    p = sub.add_parser("backup", help="Create a verified backup of the bills database.")
+    p.add_argument("--reason", default="manual")
+    p.set_defaults(func=cmd_backup)
 
     p = sub.add_parser(
         "production-readiness",
@@ -652,6 +724,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    if args.command != "migrate-state":
+        try:
+            migrate_legacy_state()
+        except OSError as exc:
+            print(f"warning: could not migrate old install state: {exc}", file=sys.stderr)
     try:
         return int(args.func(args) or 0)
     except (RuntimeError, FileNotFoundError, ValueError, plaid.ApiException) as exc:

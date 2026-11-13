@@ -36,3 +36,4 @@ workbook/*.ods
 # Local Production Plaid safety locks
 PRODUCTION_ITEM_CREATED.lock
 PRODUCTION_LINK_IN_PROGRESS.lock
+*.egg-info/

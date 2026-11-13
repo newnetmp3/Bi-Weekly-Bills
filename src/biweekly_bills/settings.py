@@ -9,9 +9,10 @@ import tempfile
 from dotenv import dotenv_values
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+from .paths import PROJECT_ROOT, user_config_dir
+
 PROJECT_ENV_PATH = PROJECT_ROOT / ".env"
-USER_CONFIG_DIR = Path.home() / ".config" / "bi-weekly-bills"
+USER_CONFIG_DIR = user_config_dir()
 USER_ENV_PATH = USER_CONFIG_DIR / "plaid.env"
 
 
