@@ -118,14 +118,14 @@ The script:
 
 1. notes which bank connection you have now
 2. makes a verified backup of your bills database and a private snapshot of `~/.config/bi-weekly-bills`
-3. installs the latest release into `~/.local/opt/bi-weekly-bills`, rebuilding that environment automatically if an Arch Python upgrade broke it
+3. finds your existing install from the `biweekly-bills-app` command (for example `~/.local/bin/biweekly-bills-app`) and updates it in place, rebuilding its environment automatically if an Arch Python upgrade broke it. An older `pip install --user` install is moved into its own environment at `~/.local/opt/bi-weekly-bills`, and `~/.local/bin/biweekly-bills-app` and the app-menu entry are pointed at it.
 4. confirms, without contacting your bank, that the same connection is still in place
 
 Options:
 
 - `--wheel ~/Downloads/bi_weekly_bills-X.Y.Z-py3-none-any.whl` installs a wheel you already downloaded
 - `--source ~/Bi-Weekly-Bills` installs from a Git checkout
-- `--venv DIR` uses a different app environment (for a Git-clone install, use `--venv ~/Bi-Weekly-Bills/.venv`)
+- `--venv DIR` updates a specific app environment instead of the one found automatically
 
 If the final check reports a problem, **do not choose "Connect bank"**. Your previous settings are in the snapshot the script printed; run `~/.local/opt/bi-weekly-bills/bin/biweekly-bills doctor` and see the [Troubleshooting](https://github.com/newnetmp3/Bi-Weekly-Bills/wiki/Troubleshooting) page.
 

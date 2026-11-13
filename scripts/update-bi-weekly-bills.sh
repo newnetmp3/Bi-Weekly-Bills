@@ -19,12 +19,21 @@
 #   update-bi-weekly-bills.sh --wheel FILE.whl     # a wheel you downloaded
 #   update-bi-weekly-bills.sh --source DIR         # a local Git checkout
 #   update-bi-weekly-bills.sh --venv DIR           # app environment location
-#                                                  # (default ~/.local/opt/bi-weekly-bills)
+#
+# Without --venv, the existing install is found from the biweekly-bills-app
+# command (normally ~/.local/bin/biweekly-bills-app):
+#   * a virtual environment or pipx install is updated in place;
+#   * a "pip install --user" install is moved into a private environment at
+#     ~/.local/opt/bi-weekly-bills, and ~/.local/bin/biweekly-bills-app is
+#     pointed at it, so the menu entry and command keep working.
 
 set -euo pipefail
 
 REPO="newnetmp3/Bi-Weekly-Bills"
-VENV="${HOME}/.local/opt/bi-weekly-bills"
+VENV=""
+DEFAULT_VENV="${HOME}/.local/opt/bi-weekly-bills"
+USER_BIN="${HOME}/.local/bin"
+USER_SITE_INSTALL=0
 WHEEL=""
 SOURCE=""
 CONFIG_DIR="${HOME}/.config/bi-weekly-bills"
@@ -39,7 +48,7 @@ while [ $# -gt 0 ]; do
     --wheel) WHEEL="$(realpath "${2:?--wheel needs a file}")"; shift 2 ;;
     --source) SOURCE="$(realpath "${2:?--source needs a folder}")"; shift 2 ;;
     --venv) VENV="${2:?--venv needs a folder}"; shift 2 ;;
-    -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
     *) fail "unknown option: $1 (try --help)" ;;
   esac
 done
@@ -57,8 +66,48 @@ fi
 SYSTEM_PYTHON="$(command -v python3 || command -v python || true)"
 [ -n "$SYSTEM_PYTHON" ] || fail "python is not installed (sudo pacman -S python)"
 
-if pgrep -f "biweekly-bills-app" >/dev/null 2>&1; then
-  fail "Bi-Weekly Bills is open. Close it, then run this again."
+# Match only a Python process running the app, not editors or shells that
+# merely mention its name.
+if RUNNING="$(pgrep -f 'python[0-9.]* [^ ]*biweekly-bills-app( |$)|-m biweekly_bills\.desktop_app' 2>/dev/null)"; then
+  fail "Bi-Weekly Bills is open (process $(echo $RUNNING)). Close it, then run this again."
+fi
+
+# --- 0. Find the existing install ------------------------------------------
+find_launcher() {
+  if [ -e "$USER_BIN/biweekly-bills-app" ]; then
+    printf '%s\n' "$USER_BIN/biweekly-bills-app"
+  else
+    command -v biweekly-bills-app 2>/dev/null || true
+  fi
+}
+
+if [ -z "$VENV" ]; then
+  LAUNCHER="$(find_launcher)"
+  if [ -n "$LAUNCHER" ]; then
+    # Follow symlinks (pipx and hand-made links) to the real script, then read
+    # its first line to learn which Python it runs with. The interpreter path
+    # itself is not resolved: inside a venv it is a link to system Python.
+    REAL_LAUNCHER="$(realpath "$LAUNCHER")"
+    SHEBANG_PY="$(head -n1 "$REAL_LAUNCHER" | sed -n 's/^#![[:space:]]*//p' | awk '{print $1}')"
+    if [ "$(basename "${SHEBANG_PY:-x}")" = "sh" ]; then
+      # pip writes a /bin/sh wrapper when the interpreter path is very long;
+      # its second line is: '''exec' /path/to/venv/bin/python "$0" "$@"
+      SHEBANG_PY="$(sed -n '2p' "$REAL_LAUNCHER" | sed "s/^'''exec' *//" | awk '{print $1}' | tr -d '"')"
+    fi
+    CANDIDATE="$(dirname "$(dirname "$SHEBANG_PY")")"
+    if [ -n "$SHEBANG_PY" ] && [ -f "$CANDIDATE/pyvenv.cfg" ]; then
+      VENV="$CANDIDATE"
+      echo "Found existing install: $LAUNCHER -> environment $VENV"
+    else
+      USER_SITE_INSTALL=1
+      VENV="$DEFAULT_VENV"
+      echo "Found existing install: $LAUNCHER (installed with pip --user)"
+      echo "It will be moved into its own environment at $VENV."
+    fi
+  else
+    VENV="$DEFAULT_VENV"
+    echo "No existing biweekly-bills-app command found; using $VENV"
+  fi
 fi
 
 STAMP="$(date -u +%Y%m%dT%H%M%S)"
@@ -116,6 +165,10 @@ collect_legacy() {
   done
 }
 for libdir in "$VENV"/lib/python3*; do collect_legacy "$libdir"; done
+if [ "$USER_SITE_INSTALL" = 1 ]; then
+  # 1.0 installed with pip --user kept its state in ~/.local/lib/python3.X
+  for libdir in "${HOME}"/.local/lib/python3*; do collect_legacy "$libdir"; done
+fi
 [ -n "$SOURCE" ] && collect_legacy "$SOURCE"
 
 # --- 4. Install ---------------------------------------------------------------
@@ -171,9 +224,22 @@ else
 fi
 
 # --- 5. Carry state forward and verify ---------------------------------------
+if [ "$USER_SITE_INSTALL" = 1 ]; then
+  say "Pointing $USER_BIN at the new environment"
+  mkdir -p "$USER_BIN"
+  for cmd in biweekly-bills-app biweekly-bills; do
+    if [ -e "$USER_BIN/$cmd" ] && [ ! -L "$USER_BIN/$cmd" ]; then
+      mv "$USER_BIN/$cmd" "$USER_BIN/$cmd.before-update-$STAMP"
+    fi
+    ln -sfn "$VENV/bin/$cmd" "$USER_BIN/$cmd"
+  done
+  echo "  Old commands kept as $USER_BIN/*.before-update-$STAMP"
+fi
+
 say "Carrying saved connection state forward"
 "$VENV/bin/biweekly-bills" migrate-state --from "$LEGACY"
-"$VENV/bin/biweekly-bills" install-desktop >/dev/null 2>&1 || true
+# Refresh the app-menu entry so it starts the updated version.
+PATH="$USER_BIN:$VENV/bin:$PATH" "$VENV/bin/biweekly-bills" install-desktop >/dev/null 2>&1 || true
 
 say "Checking the bank connection (offline, no sign-in)"
 if [ -n "$ITEM_ID" ]; then
