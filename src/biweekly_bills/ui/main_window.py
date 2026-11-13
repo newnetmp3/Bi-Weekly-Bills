@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import __version__
 from ..backups import BackupManager
 from ..bank_connection import connection_state
 from ..branding import brand_logo_pixmap
@@ -41,7 +42,7 @@ from .context_menu import (
     show_table_context_menu,
 )
 from .transactions_page import TransactionsPage
-from .formatting import money, schedule_balance
+from .formatting import money, relative_time, schedule_balance
 from .overview_chart import DonutBreakdownChart
 from .pay_periods import PayPeriodsPage
 from .reconciliation_page import ReconciliationPage
@@ -1307,6 +1308,24 @@ class MainWindow(QMainWindow):
         topbar_layout.addLayout(heading_box)
         topbar_layout.addStretch(1)
 
+        # Daily-use bank sync, reachable from every page.
+        sync_box = QVBoxLayout()
+        sync_box.setSpacing(2)
+        self.sync_button = QPushButton("Sync bank")
+        self.sync_button.setObjectName("PrimaryButton")
+        self.sync_button.setAccessibleName("Sync bank balances and transactions")
+        self.sync_button.setToolTip(
+            "Download new balances and transactions using your existing "
+            "bank connection. Never asks you to sign in again."
+        )
+        self.sync_button.clicked.connect(self._sync_bank)
+        self.sync_note = QLabel("")
+        self.sync_note.setObjectName("PageSubtitle")
+        self.sync_note.setAlignment(Qt.AlignmentFlag.AlignRight)
+        sync_box.addWidget(self.sync_button, 0, Qt.AlignmentFlag.AlignRight)
+        sync_box.addWidget(self.sync_note)
+        topbar_layout.addLayout(sync_box)
+
 
         self.pages = QStackedWidget()
         self.dashboard = DashboardPage(
@@ -1356,6 +1375,8 @@ class MainWindow(QMainWindow):
             auto_refresh=False,
         )
         self.pages.addWidget(self.settings)
+        self.settings.connection_busy.connect(self._on_sync_busy)
+        self.settings.connection_done.connect(self._on_sync_done)
 
         self._nav_defaults = {
             "overview": (
@@ -1416,6 +1437,7 @@ class MainWindow(QMainWindow):
         self.nav_edit_button = QPushButton("⚙")
         self.nav_edit_button.setObjectName("NavEditButton")
         self.nav_edit_button.setAccessibleName("Edit sidebar sections")
+        self.nav_edit_button.setToolTip("Rename or reorder sidebar sections")
         self.nav_edit_button.setCheckable(True)
         self.nav_edit_button.setFixedSize(30, 30)
         self.nav_edit_button.toggled.connect(
@@ -1503,6 +1525,9 @@ class MainWindow(QMainWindow):
         self.account_note.setObjectName("BrandSub")
         self.account_note.setAlignment(Qt.AlignmentFlag.AlignLeft)
         side.addWidget(self.account_note)
+        self.version_note = QLabel(f"Version {__version__}")
+        self.version_note.setObjectName("BrandSub")
+        side.addWidget(self.version_note)
 
         content_layout.addWidget(topbar)
         content_layout.addWidget(self.pages, 1)
@@ -1511,6 +1536,7 @@ class MainWindow(QMainWindow):
         outer.addWidget(content, 1)
 
         first_run_state = connection_state(database)
+        self._refresh_sync_controls(first_run_state.action)
         if first_run_state.action == "sync":
             self._navigate(
                 0,
@@ -1523,6 +1549,44 @@ class MainWindow(QMainWindow):
                 "Settings",
                 "Bank setup, connected accounts, and backups",
             )
+
+    def _refresh_sync_controls(self, action: str | None = None) -> None:
+        if action is None:
+            action = connection_state(self.database).action
+        sync = self.database.get_sync_state("production")
+        last = sync["last_sync_at"] if sync is not None else None
+        if action == "sync":
+            self.sync_button.setText("Sync bank")
+            self.sync_note.setText(f"Last synced {relative_time(last)}")
+        else:
+            self.sync_button.setText("Finish bank setup")
+            self.sync_note.setText("Bank setup is not complete")
+
+    def _sync_bank(self) -> None:
+        if not self.settings.start_sync():
+            self._navigate(
+                6,
+                "Settings",
+                "Bank setup, connected accounts, and backups",
+            )
+            self._refresh_sync_controls()
+
+    def _on_sync_busy(self, message: str) -> None:
+        self.sync_button.setEnabled(False)
+        self.sync_note.setText(message)
+
+    def _on_sync_done(self, ok: bool, message: str) -> None:
+        self.sync_button.setEnabled(True)
+        self._refresh_sync_controls()
+        if not ok:
+            self.sync_note.setText("Sync needs attention — see Settings")
+            self.sync_note.setToolTip(message)
+        else:
+            self.sync_note.setToolTip(message)
+        current = self.pages.currentIndex()
+        if current != 6:
+            self._refresh_page(current)
+            self._page_dirty[current] = False
 
     def _open_pay_period(self, cycle: str) -> None:
         self.pay_periods.set_view(cycle, refresh=False)

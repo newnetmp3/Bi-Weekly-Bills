@@ -50,7 +50,7 @@ def relative_time(value: str | None, *, now=None) -> str:
     hours = minutes // 60
     if hours < 24:
         return f"{hours} hour{'s' if hours != 1 else ''} ago"
-    days = hours // 24
+    days = max(1, (current.astimezone().date() - moment.astimezone().date()).days)
     if days == 1:
         return "yesterday"
     if days < 14:

@@ -56,16 +56,6 @@ Use the filename of the release you actually downloaded if it is newer.
 
 The first launch installs or refreshes the current user's desktop launcher and icon. After that, **Bi-Weekly Bills** should be available from the desktop application menu.
 
-### Updating
-
-Download the newer wheel and install it into the same environment:
-
-```bash
-~/.local/opt/bi-weekly-bills/bin/python -m pip install --upgrade ~/Downloads/bi_weekly_bills-X.Y.Z-py3-none-any.whl
-```
-
-Replace `X.Y.Z` with the version you downloaded.
-
 ## Alternate: install from a Git clone
 
 If you prefer to install directly from the repository:
@@ -83,6 +73,51 @@ python -m venv .venv
 ```
 
 Normal users do not need any Git workflow beyond the initial `git clone`. There is no need to commit, push, create branches, or otherwise manage Git to use the application.
+
+## Updating (keeps your bank connection)
+
+Updating never requires signing in to your bank again. Your saved bank connection, Plaid API keys, sync state, and bills database all live in your home folder, not in the app's install folder.
+
+Close Bi-Weekly Bills, then run:
+
+```bash
+curl -fsSLo /tmp/update-bi-weekly-bills.sh https://raw.githubusercontent.com/newnetmp3/Bi-Weekly-Bills/main/scripts/update-bi-weekly-bills.sh
+```
+
+```bash
+bash /tmp/update-bi-weekly-bills.sh
+```
+
+The script:
+
+1. notes which bank connection you have now
+2. makes a verified backup of your bills database and a private snapshot of `~/.config/bi-weekly-bills`
+3. installs the latest release into `~/.local/opt/bi-weekly-bills`, rebuilding that environment automatically if an Arch Python upgrade broke it
+4. confirms, without contacting your bank, that the same connection is still in place
+
+Options:
+
+- `--wheel ~/Downloads/bi_weekly_bills-X.Y.Z-py3-none-any.whl` installs a wheel you already downloaded
+- `--source ~/Bi-Weekly-Bills` installs from a Git checkout
+- `--venv DIR` uses a different app environment (for a Git-clone install, use `--venv ~/Bi-Weekly-Bills/.venv`)
+
+If the final check reports a problem, **do not choose "Connect bank"**. Your previous settings are in the snapshot the script printed; run `~/.local/opt/bi-weekly-bills/bin/biweekly-bills doctor` and see [[Troubleshooting]].
+
+You can run the same check yourself at any time:
+
+```bash
+~/.local/opt/bi-weekly-bills/bin/biweekly-bills verify-update
+```
+
+### Updating by hand
+
+Installing a newer wheel into the same environment also keeps your connection:
+
+```bash
+~/.local/opt/bi-weekly-bills/bin/python -m pip install --upgrade ~/Downloads/bi_weekly_bills-X.Y.Z-py3-none-any.whl
+```
+
+Version 1.1 and newer automatically move connection state that 1.0 kept inside the install folder into `~/.config/bi-weekly-bills/state` the first time they start.
 
 ## Desktop launcher
 

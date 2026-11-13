@@ -8,6 +8,7 @@ from .backups import BackupManager
 from .database import Database, default_database_path
 from .desktop_integration import APP_ID, APP_NAME, ensure_desktop_integration
 from .ods_importer import import_ods_history
+from .paths import migrate_legacy_state
 from .production_cutover import purge_sandbox_transactions_for_production
 
 
@@ -43,6 +44,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
+
+    # Bring connection state forward from an older install folder before any
+    # bank-connection safety check reads it.
+    try:
+        migrated = migrate_legacy_state()
+        if migrated.changed:
+            print(
+                "Moved saved connection state from the old install folder: "
+                + ", ".join(migrated.copied or ["Plaid API keys"])
+            )
+    except OSError as exc:
+        print(f"warning: could not migrate old install state: {exc}", file=sys.stderr)
 
     database = Database(args.db)
     backup_manager = BackupManager(database)

@@ -100,15 +100,50 @@ If you downloaded a newer release, use that wheel's filename instead.
 
 On first launch, Bi-Weekly Bills installs or refreshes its desktop launcher and icon. After that, you can normally start **Bi-Weekly Bills** from your desktop environment's application menu.
 
-#### Updating a wheel installation
+### Updating (keeps your bank connection)
 
-Download the newer wheel from Releases and install it into the same app environment:
+Updating never requires signing in to your bank again. Your saved bank connection, Plaid API keys, sync state, and bills database all live in your home folder, not in the app's install folder.
+
+Close Bi-Weekly Bills, then run:
+
+```bash
+curl -fsSLo /tmp/update-bi-weekly-bills.sh https://raw.githubusercontent.com/newnetmp3/Bi-Weekly-Bills/main/scripts/update-bi-weekly-bills.sh
+```
+
+```bash
+bash /tmp/update-bi-weekly-bills.sh
+```
+
+The script:
+
+1. notes which bank connection you have now
+2. makes a verified backup of your bills database and a private snapshot of `~/.config/bi-weekly-bills`
+3. installs the latest release into `~/.local/opt/bi-weekly-bills`, rebuilding that environment automatically if an Arch Python upgrade broke it
+4. confirms, without contacting your bank, that the same connection is still in place
+
+Options:
+
+- `--wheel ~/Downloads/bi_weekly_bills-X.Y.Z-py3-none-any.whl` installs a wheel you already downloaded
+- `--source ~/Bi-Weekly-Bills` installs from a Git checkout
+- `--venv DIR` uses a different app environment (for a Git-clone install, use `--venv ~/Bi-Weekly-Bills/.venv`)
+
+If the final check reports a problem, **do not choose "Connect bank"**. Your previous settings are in the snapshot the script printed; run `~/.local/opt/bi-weekly-bills/bin/biweekly-bills doctor` and see the [Troubleshooting](https://github.com/newnetmp3/Bi-Weekly-Bills/wiki/Troubleshooting) page.
+
+You can run the same check yourself at any time:
+
+```bash
+~/.local/opt/bi-weekly-bills/bin/biweekly-bills verify-update
+```
+
+##### Updating by hand
+
+Installing a newer wheel into the same environment also keeps your connection:
 
 ```bash
 ~/.local/opt/bi-weekly-bills/bin/python -m pip install --upgrade ~/Downloads/bi_weekly_bills-X.Y.Z-py3-none-any.whl
 ```
 
-Replace `X.Y.Z` with the version you downloaded.
+Version 1.1 and newer automatically move connection state that 1.0 kept inside the install folder into `~/.config/bi-weekly-bills/state` the first time they start.
 
 ### Alternate: install with Git clone
 
@@ -151,7 +186,7 @@ A typical pay-period workflow is:
 2. Check the amount the app says should be funded into Bills Checking.
 3. Make that transfer through your bank.
 4. Let scheduled automatic payments post normally.
-5. Sync transactions in Bi-Weekly Bills.
+5. Press **Sync bank** (top-right on every page) to download new transactions.
 6. Review anything the app could not confidently match on its own.
 
 The app deliberately leaves uncertain payments for review instead of automatically assigning them to the wrong bill.
@@ -169,6 +204,8 @@ Private Plaid configuration and credentials are stored separately under:
 ```text
 ~/.config/bi-weekly-bills/
 ```
+
+Non-secret sync state (transaction cursor, Bills Checking choice, and the one-bank-connection safety lock) is kept in `~/.config/bi-weekly-bills/state/`. None of these locations are touched when you install, update, or reinstall the app. **Settings → About & updates** shows every location and opens it for you.
 
 Do not upload or share personal databases, reports, account information, or Plaid credentials.
 
@@ -189,6 +226,6 @@ Technical and migration documentation is also available in the repository under 
 
 ## Release
 
-The current stable release is **v1.0.0**.
+The current stable release is **v1.1.0**.
 
 Release downloads are available from the **[GitHub Releases page](https://github.com/newnetmp3/Bi-Weekly-Bills/releases)**.

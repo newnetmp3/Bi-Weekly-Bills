@@ -33,6 +33,18 @@ Check **Settings → Accounts & bill funding**:
 2. Confirm the Transfer Source role.
 3. Verify every bill meant to be funded into Bills Checking has **Payment Account = Bills Checking**.
 
+## After an update the app asks to connect the bank
+
+Do **not** choose **Connect bank**; that would create a second connection. Your saved connection is almost certainly still in `~/.config/bi-weekly-bills/`. Run:
+
+```bash
+~/.local/opt/bi-weekly-bills/bin/biweekly-bills verify-update
+```
+
+- If it says the **Plaid API keys are missing**, re-enter the Client ID and Secret in **Settings**. That is not a bank sign-in, and the existing connection is reused.
+- If you updated from a Git clone, copy its state over: `biweekly-bills migrate-state --from ~/Bi-Weekly-Bills`.
+- The update script saves a snapshot of your settings in `~/.local/share/bi-weekly-bills/update-snapshots/`. Restore it with `tar -xzf <snapshot> -C ~/.config`.
+
 ## Bank sign-in broke
 
 Use **Repair bank connection** in Settings or:

@@ -79,11 +79,12 @@ jobs:
             exit 0
           fi
 
-          if [ "$VERSION" = "1.0.0" ]; then
+          NOTES="docs/RELEASE_NOTES_${VERSION%.*}.md"
+          if [ -f "$NOTES" ]; then
             gh release create "$TAG" dist/* \
               --target "$GITHUB_SHA" \
               --title "Bi-Weekly Bills $TAG" \
-              --notes-file docs/RELEASE_NOTES_1.0.md
+              --notes-file "$NOTES"
           else
             gh release create "$TAG" dist/* \
               --target "$GITHUB_SHA" \

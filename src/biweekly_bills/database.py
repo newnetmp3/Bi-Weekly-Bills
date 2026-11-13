@@ -26,11 +26,10 @@ def utc_now() -> str:
 
 
 def default_database_path() -> Path:
+    # An empty XDG_DATA_HOME means "unset" per the XDG spec.
     root = Path(
-        os.environ.get(
-            "XDG_DATA_HOME",
-            Path.home() / ".local" / "share",
-        )
+        os.environ.get("XDG_DATA_HOME")
+        or Path.home() / ".local" / "share"
     )
     return root / "bi-weekly-bills" / "biweekly-bills.sqlite3"
 

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import __version__
 from ..backups import BackupInfo, BackupManager
 from ..bank_connection import (
     ConnectionResult,
@@ -29,6 +30,7 @@ from ..bank_connection import (
 from ..database import Database
 from ..secure_store import load_credentials
 from ..settings import load_settings, save_user_bank_settings
+from ..update_support import storage_locations
 from .bank_pages import AccountsPage
 from .busy_cursor import begin_busy_cursor, end_busy_cursor
 from .context_menu import (
@@ -100,6 +102,10 @@ class _ConnectionWorker(QObject):
 
 
 class SettingsPage(QWidget):
+    # Lets the window-wide Sync button follow bank operations started anywhere.
+    connection_busy = Signal(str)
+    connection_done = Signal(bool, str)
+
     def __init__(
         self,
         database: Database,
@@ -388,10 +394,85 @@ class SettingsPage(QWidget):
         note.setObjectName("Muted")
         note.setWordWrap(True)
         root.addWidget(note)
+
+        root.addWidget(self._build_about_card())
         root.addStretch(1)
 
         if auto_refresh:
             self.refresh()
+
+    def _build_about_card(self) -> QFrame:
+        about_title = QLabel("About & updates")
+        about_title.setObjectName("SectionTitle")
+
+        card = QFrame()
+        card.setObjectName("Card")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 14)
+        layout.setSpacing(8)
+        layout.addWidget(about_title)
+
+        version = QLabel(f"Bi-Weekly Bills {__version__}")
+        version.setObjectName("SectionTitle")
+        layout.addWidget(version)
+
+        explain = QLabel(
+            "Updating the app keeps your bank connection. Your saved "
+            "connection, API keys, and bills database live in your home "
+            "folder, not in the app's install folder, so no bank sign-in "
+            "is needed after an update. To update, close the app and run "
+            "the update script from the Wiki's Installation page."
+        )
+        explain.setObjectName("Muted")
+        explain.setWordWrap(True)
+        layout.addWidget(explain)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
+        for row, (label, path) in enumerate(storage_locations().items()):
+            name = QLabel(label)
+            shown = str(path)
+            home = str(Path.home())
+            if shown.startswith(home + "/"):
+                shown = "~" + shown[len(home):]
+            location = QLabel(shown)
+            location.setObjectName("Muted")
+            location.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            open_button = QPushButton("Open folder")
+            open_button.setObjectName("SecondaryButton")
+            folder = path if path.suffix == "" else path.parent
+            open_button.clicked.connect(
+                lambda _checked=False, target=folder: self._open_folder(target)
+            )
+            grid.addWidget(name, row, 0)
+            grid.addWidget(location, row, 1)
+            grid.addWidget(open_button, row, 2)
+        grid.setColumnStretch(1, 1)
+        layout.addLayout(grid)
+        return card
+
+    @staticmethod
+    def _open_folder(path: Path) -> None:
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def can_sync(self) -> bool:
+        state = self._connection_state or connection_state(self.database)
+        return state.action == "sync"
+
+    def start_sync(self) -> bool:
+        """Start a background bank sync; False if setup is not finished."""
+        self._refresh_connection()
+        if not self.can_sync():
+            return False
+        self._start_connection_worker("sync")
+        return True
 
     def _summary_card(self, label_text: str):
         card = QFrame()
@@ -602,6 +683,7 @@ class SettingsPage(QWidget):
         else:
             message = "Syncing accounts and transactions…"
         self.connection_status.setText(message)
+        self.connection_busy.emit(message)
 
         if not self._busy_cursor_active:
             begin_busy_cursor()
@@ -634,6 +716,7 @@ class SettingsPage(QWidget):
         self.accounts_panel.refresh()
         self._refresh_connection()
         self.on_data_changed()
+        self.connection_done.emit(True, self.connection_status.text())
 
     @Slot(str)
     def _connection_failed(self, message: str) -> None:
@@ -641,6 +724,7 @@ class SettingsPage(QWidget):
             f"Bank connection needs attention: {message}"
         )
         self._refresh_connection()
+        self.connection_done.emit(False, self.connection_status.text())
 
     @Slot()
     def _connection_thread_finished(self) -> None:
