@@ -35,11 +35,42 @@ def transaction_date(row: Any) -> date | None:
 
 
 def candidate_bill_instances(database: Database, row: Any) -> list[Any]:
+    """Bills a payment could reasonably be linked to by hand.
+
+    Every bill in the payment's month (its own 1st/15th period first), plus
+    the neighbouring month's bills when the payment is within a week of the
+    month boundary, because bills are often paid a few days early or late.
+    """
     tx_date = transaction_date(row)
     if tx_date is None:
         return []
-    cycle = cycle_for_day(tx_date.day)
-    return database.list_cycle_instances(tx_date.year, tx_date.month, cycle)
+    from .auto_reconcile import candidate_instances
+
+    own_cycle = cycle_for_day(tx_date.day)
+    seen: set[int] = set()
+    ordered: list[Any] = []
+    for instance in candidate_instances(database, tx_date, active_only=True):
+        instance_id = int(instance["id"])
+        if instance_id in seen:
+            continue
+        seen.add(instance_id)
+        ordered.append(instance)
+
+    def sort_key(instance: Any) -> tuple[int, str]:
+        same_month = (
+            int(instance["year"]) == tx_date.year
+            and int(instance["month"]) == tx_date.month
+        )
+        if same_month and str(instance["cycle"]) == own_cycle:
+            rank = 0
+        elif same_month:
+            rank = 1
+        else:
+            rank = 2
+        return rank, str(instance["bill_name_snapshot"]).casefold()
+
+    ordered.sort(key=sort_key)
+    return ordered
 
 
 def suggested_bill_instance(database: Database, row: Any) -> Any | None:
@@ -65,14 +96,12 @@ def build_preview(
     if tx_date is None:
         raise ValueError("Transaction does not have a usable posted/authorized date.")
 
-    expected_cycle = cycle_for_day(tx_date.day)
-    if (
-        int(target["year"]) != tx_date.year
-        or int(target["month"]) != tx_date.month
-        or str(target["cycle"]) != expected_cycle
-    ):
+    allowed = {int(candidate["id"]) for candidate in candidate_bill_instances(database, row)}
+    if bill_instance_id not in allowed:
         raise ValueError(
-            "Target bill must be in the same month and 1st/15th pay period as the transaction."
+            "That bill is too far from the payment date. Pick a bill from the "
+            "payment's month, or from the next or previous month when the "
+            "payment was made within a week of the month changing."
         )
 
     bank_amount = int(row["amount_cents"])

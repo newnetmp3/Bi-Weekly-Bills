@@ -97,6 +97,14 @@ def plaid_amount(cents: int) -> str:
 _NOT_LINKED = "Not linked"
 
 
+class _AutoHideLabel(QLabel):
+    """A message line that takes no space while it has nothing to say."""
+
+    def setText(self, text: str) -> None:  # noqa: N802 (Qt naming)
+        super().setText(text)
+        self.setVisible(bool(text))
+
+
 class TransactionsPage(QWidget):
     def __init__(
         self,
@@ -162,7 +170,7 @@ class TransactionsPage(QWidget):
         self.match_filter.addItem("Linked to a bill", "matched")
         self.match_filter.addItem("Marked not a bill", "ignored")
         self.match_filter.addItem("Funding transfers", "funding")
-        self.match_filter.addItem("Internal transfers", "internal")
+        self.match_filter.addItem("Card and loan payments", "internal")
         self.match_filter.addItem("Not linked yet", "unresolved")
         self.match_filter.currentIndexChanged.connect(self._apply_filters)
         toolbar.addWidget(self.match_filter, 1)
@@ -236,38 +244,45 @@ class TransactionsPage(QWidget):
         self.reconcile_card.setObjectName("Card")
         reconcile_layout = QVBoxLayout(self.reconcile_card)
         reconcile_layout.setContentsMargins(18, 16, 18, 18)
-        reconcile_layout.setSpacing(10)
+        reconcile_layout.setSpacing(8)
 
-        top = QHBoxLayout()
-        title = QLabel("Link a payment to a bill")
-        title.setObjectName("SectionTitle")
-        self.selected_label = QLabel("Pick a payment in the list above.")
-        self.selected_label.setObjectName("Muted")
-        top.addWidget(title)
-        top.addSpacing(10)
-        top.addWidget(self.selected_label)
-        top.addStretch(1)
-        reconcile_layout.addLayout(top)
+        # Which payment is selected.
+        self.selected_label = QLabel("")
+        self.selected_label.setObjectName("SectionTitle")
+        self.selected_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.selected_meta = QLabel("")
+        self.selected_meta.setObjectName("Muted")
+        reconcile_layout.addWidget(self.selected_label)
+        reconcile_layout.addWidget(self.selected_meta)
 
-        target_row = QHBoxLayout()
-        target_label = QLabel("Bill")
-        target_label.setObjectName("MetricLabel")
-        target_row.addWidget(target_label)
+        # What is true about it right now, in one headline and one sentence.
+        self.state_title = QLabel("")
+        self.state_title.setObjectName("SectionTitle")
+        self.state_title.setWordWrap(True)
+        self.state_detail = QLabel("")
+        self.state_detail.setObjectName("Muted")
+        self.state_detail.setWordWrap(True)
+        reconcile_layout.addSpacing(4)
+        reconcile_layout.addWidget(self.state_title)
+        reconcile_layout.addWidget(self.state_detail)
+
+        # Bill choice, only shown when the user is linking.
+        self.picker_box = QWidget()
+        picker_layout = QVBoxLayout(self.picker_box)
+        picker_layout.setContentsMargins(0, 4, 0, 0)
+        picker_layout.setSpacing(6)
+        picker_row = QHBoxLayout()
+        picker_label = QLabel("This payment is for")
+        picker_row.addWidget(picker_label)
         self.target_bill = QComboBox()
+        self.target_bill.setMinimumWidth(420)
         self.target_bill.currentIndexChanged.connect(self._update_preview)
-        target_row.addWidget(self.target_bill, 2)
-        self.period_label = QLabel("")
-        self.period_label.setObjectName("Pill")
-        target_row.addWidget(self.period_label)
-        target_row.addStretch(1)
-        reconcile_layout.addLayout(target_row)
-
-        metrics = QHBoxLayout()
-        self.expected_value = self._metric(metrics, "Bill amount")
-        self.bank_value = self._metric(metrics, "Bank amount")
-        self.existing_paid_value = self._metric(metrics, "Recorded as paid")
-        self.difference_value = self._metric(metrics, "Difference")
-        reconcile_layout.addLayout(metrics)
+        picker_row.addWidget(self.target_bill, 1)
+        picker_layout.addLayout(picker_row)
+        self.compare_label = _AutoHideLabel("")
+        self.compare_label.setWordWrap(True)
+        picker_layout.addWidget(self.compare_label)
+        reconcile_layout.addWidget(self.picker_box)
 
         self.warning = QLabel("")
         self.warning.setObjectName("Muted")
@@ -280,21 +295,33 @@ class TransactionsPage(QWidget):
         self.accept_button.clicked.connect(self._accept)
         actions.addWidget(self.accept_button)
 
+        self.change_button = QPushButton("Link to a different bill")
+        self.change_button.setObjectName("SecondaryButton")
+        self.change_button.clicked.connect(self._start_changing_link)
+        actions.addWidget(self.change_button)
+
         self.ignore_button = QPushButton("Not a bill")
         self.ignore_button.setObjectName("SecondaryButton")
+        self.ignore_button.setToolTip(
+            "This payment is not for any bill (shopping, transfers, etc.)."
+        )
         self.ignore_button.clicked.connect(self._ignore)
         actions.addWidget(self.ignore_button)
 
-        self.undo_button = QPushButton("Undo")
+        self.undo_button = QPushButton("Unlink")
         self.undo_button.setObjectName("SecondaryButton")
         self.undo_button.clicked.connect(self._undo)
         actions.addWidget(self.undo_button)
 
         actions.addStretch(1)
-        self.action_status = QLabel("")
-        self.action_status.setObjectName("Muted")
-        actions.addWidget(self.action_status)
         reconcile_layout.addLayout(actions)
+
+        self.action_status = _AutoHideLabel("")
+        self.action_status.setObjectName("Muted")
+        self.action_status.setWordWrap(True)
+        self.action_status.setVisible(False)
+        reconcile_layout.addWidget(self.action_status)
+        self._changing_link = False
 
         root.addWidget(self.reconcile_card)
 
@@ -482,16 +509,16 @@ class TransactionsPage(QWidget):
 
         menu.addSeparator()
 
-        if self.accept_button.isEnabled():
-            accept = menu.addAction("Accept current match")
+        if self.accept_button.isVisible() and self.accept_button.isEnabled():
+            accept = menu.addAction(self.accept_button.text())
             accept.triggered.connect(self._accept)
 
-        if self.ignore_button.isEnabled():
-            ignore = menu.addAction("Ignore transaction")
+        if self.ignore_button.isVisible() and self.ignore_button.isEnabled():
+            ignore = menu.addAction("Not a bill")
             ignore.triggered.connect(self._ignore)
 
-        if self.undo_button.isEnabled():
-            undo = menu.addAction("Undo match / ignore")
+        if self.undo_button.isVisible() and self.undo_button.isEnabled():
+            undo = menu.addAction(self.undo_button.text())
             undo.triggered.connect(self._undo)
 
         if self.validate_funding_button.isEnabled():
@@ -875,11 +902,11 @@ class TransactionsPage(QWidget):
 
             if internal_role == "source":
                 reconciliation = (
-                    f"Internal transfer paid → {internal_bill}"
+                    f"Linked → {internal_bill} (card payment)"
                 )
             elif internal_role == "destination":
                 reconciliation = (
-                    f"Internal transfer received → {internal_bill}"
+                    f"Card received payment → {internal_bill}"
                 )
             elif funding_scope:
                 scope_label = (
@@ -1143,6 +1170,9 @@ class TransactionsPage(QWidget):
         tx_id = str(items[0].data(Qt.ItemDataRole.UserRole) or "")
         if not tx_id:
             return
+        if tx_id != self.selected_transaction_id:
+            self._changing_link = False
+            self.action_status.setText("")
         self.selected_transaction_id = tx_id
 
         row = self._selected_row()
@@ -1153,7 +1183,10 @@ class TransactionsPage(QWidget):
         self._load_transaction_detail(row)
 
         if row["internal_transfer_role"] == "destination":
-            self._load_internal_transfer_evidence(row)
+            self.reconcile_card.setVisible(True)
+            self.funding_card.setVisible(False)
+            self._clear_funding_transfer_panel(keep_selection=True)
+            self._render_link_state(row)
             return
 
         funding_mode = (
@@ -1167,302 +1200,324 @@ class TransactionsPage(QWidget):
         self.reconcile_card.setVisible(not funding_mode)
         self.funding_card.setVisible(funding_mode)
 
-        merchant = (
-            row["merchant_name"]
-            or row["name"]
-            or "(unnamed transaction)"
-        )
-        self.selected_label.setText(
-            f"{merchant} · {plaid_amount(int(row['amount_cents']))} · "
-            f"{row['posted_date'] or row['authorized_date'] or 'no date'}"
+        self._render_link_state(row)
+        self._load_funding_transfer_panel(row)
+
+    # ---- "Link a payment to a bill" panel -----------------------------
+
+    @staticmethod
+    def _period_text(instance: Any) -> str:
+        return (
+            f"{MONTH_NAMES[int(instance['month']) - 1]} "
+            f"{int(instance['year'])}, {instance['cycle']} period"
         )
 
+    @staticmethod
+    def _account_text(name: Any, mask: Any, fallback: str) -> str:
+        text = str(name or fallback)
+        if mask:
+            text += f" ••••{mask}"
+        return text
+
+    def _bill_choice_label(self, instance: Any, row: Any) -> str:
+        label = (
+            f"{instance['bill_name_snapshot']} — "
+            f"{MONTH_NAMES[int(instance['month']) - 1][:3]} "
+            f"{int(instance['year'])}, {instance['cycle']}"
+        )
+        if instance["due_cents"] is not None:
+            label += f" · {money(int(instance['due_cents']))} due"
+        if self._bill_taken_by_other(instance, row):
+            label += " · already has a bank payment"
+        return label
+
+    @staticmethod
+    def _bill_taken_by_other(instance: Any, row: Any) -> bool:
+        keys = instance.keys()
+        if "bank_verified" not in keys or not int(instance["bank_verified"] or 0):
+            return False
+        holder = str(instance["bank_transaction_id"] or "")
+        return holder != str(row["plaid_transaction_id"])
+
+    def _show_payment_header(self, row: Any) -> None:
+        merchant = row["merchant_name"] or row["name"] or "(no description)"
+        amount = int(row["amount_cents"])
+        shown = money(abs(amount))
+        if amount < 0:
+            shown = "+" + shown
+        self.selected_label.setText(f"{shown}  ·  {merchant}")
+        tx_date = transaction_date(row)
+        when = tx_date.strftime("%b %d, %Y").replace(" 0", " ") if tx_date else "no date"
+        account = self._account_text(row["account_name"], row["account_mask"], "unknown account")
+        direction = "into" if amount < 0 else "from"
+        self.selected_meta.setText(f"{when} · {direction} {account}")
+
+    def _set_link_state(
+        self,
+        title: str,
+        detail: str,
+        *,
+        picker: bool = False,
+        accept: bool = False,
+        change: bool = False,
+        ignore: bool = False,
+        undo: str | None = None,
+    ) -> None:
+        self.state_title.setText(title)
+        self.state_detail.setText(detail)
+        self.state_detail.setVisible(bool(detail))
+        self.picker_box.setVisible(picker)
+        self.accept_button.setVisible(accept)
+        self.change_button.setVisible(change)
+        self.ignore_button.setVisible(ignore)
+        self.ignore_button.setEnabled(ignore)
+        self.undo_button.setVisible(undo is not None)
+        self.undo_button.setEnabled(undo is not None)
+        if undo is not None:
+            self.undo_button.setText(undo)
+        if not picker:
+            self.accept_button.setEnabled(False)
+            self.compare_label.setText("")
+        self.warning.setText("")
+        self.warning.setVisible(False)
+
+    def _fill_bill_picker(self, row: Any, preferred_id: int | None) -> None:
         candidates = candidate_bill_instances(self.database, row)
         self.target_bill.blockSignals(True)
         self.target_bill.clear()
         self.target_bill.addItem("Choose a bill…", None)
         for instance in candidates:
-            label = str(instance["bill_name_snapshot"])
-            due = instance["due_cents"]
-            if due is not None:
-                label += f" · expected {money(int(due))}"
-            self.target_bill.addItem(label, int(instance["id"]))
-
-        preferred_id = row["reconciled_bill_instance_id"]
-        if preferred_id is None:
-            suggested = suggested_bill_instance(self.database, row)
-            preferred_id = (
-                int(suggested["id"])
-                if suggested is not None
-                else None
-            )
-        if preferred_id is None:
-            review, ambiguous = best_review_candidate(
-                self.database,
-                row,
-                active_only=False,
-            )
-            if review is not None and not ambiguous:
-                preferred_id = review.bill_instance_id
-
-        # Automatic matching can legitimately cross the 1st/15th date
-        # boundary. If the matched bill is outside the manual candidate cycle,
-        # still show the authoritative reconciled target in the inspector.
-        if (
-            preferred_id is not None
-            and self.target_bill.findData(int(preferred_id)) < 0
-        ):
-            matched_instance = self.database.get_bill_instance(
-                int(preferred_id)
-            )
-            if matched_instance is not None:
-                label = str(matched_instance["bill_name_snapshot"])
-                due = matched_instance["due_cents"]
-                if due is not None:
-                    label += f" · expected {money(int(due))}"
-                self.target_bill.addItem(
-                    label,
-                    int(preferred_id),
-                )
-
-        if preferred_id is not None:
-            idx = self.target_bill.findData(int(preferred_id))
-            if idx >= 0:
-                self.target_bill.setCurrentIndex(idx)
-        self.target_bill.blockSignals(False)
-
-        tx_date = transaction_date(row)
-        if tx_date:
-            cycle = "1st" if tx_date.day < 15 else "15th"
-            self.period_label.setText(
-                f"{MONTH_NAMES[tx_date.month - 1]} "
-                f"{tx_date.year} · {cycle}"
-            )
-        else:
-            self.period_label.setText("No usable transaction date")
-
-        disposition = row["reconciliation_disposition"]
-        self.undo_button.setEnabled(
-            disposition in {"matched", "ignored"}
-            or row["internal_transfer_role"] is not None
-        )
-        self.ignore_button.setEnabled(not int(row["pending"]))
-        self.accept_button.setEnabled(False)
-        self._update_preview()
-        self._load_funding_transfer_panel(row)
-
-    def _load_internal_transfer_evidence(self, row: Any) -> None:
-        self.reconcile_card.setVisible(True)
-        self.funding_card.setVisible(False)
-        self._clear_funding_transfer_panel(keep_selection=True)
-
-        merchant = (
-            row["merchant_name"]
-            or row["name"]
-            or "(incoming internal transfer)"
-        )
-        account = row["account_name"] or "credit/loan account"
-        if row["account_mask"]:
-            account += f" ••••{row['account_mask']}"
-
-        self.selected_label.setText(
-            f"{merchant} · {plaid_amount(int(row['amount_cents']))} · "
-            f"{row['posted_date'] or row['authorized_date'] or 'no date'}"
-        )
-
-        bill_instance_id = row["internal_transfer_bill_instance_id"]
-        bill = (
-            self.database.get_bill_instance(int(bill_instance_id))
-            if bill_instance_id is not None
-            else None
-        )
-        bill_name = str(
-            row["internal_transfer_bill_name"] or "matched bill"
-        )
-
-        self.target_bill.blockSignals(True)
-        self.target_bill.clear()
-        if bill is not None:
-            label = bill_name
-            if bill["due_cents"] is not None:
-                label += f" · expected {money(int(bill['due_cents']))}"
             self.target_bill.addItem(
-                label,
-                int(bill_instance_id),
+                self._bill_choice_label(instance, row), int(instance["id"])
             )
-            self.target_bill.setCurrentIndex(0)
-        else:
-            self.target_bill.addItem(bill_name, None)
+        if preferred_id is not None:
+            index = self.target_bill.findData(int(preferred_id))
+            if index >= 0:
+                self.target_bill.setCurrentIndex(index)
         self.target_bill.blockSignals(False)
 
-        tx_date = transaction_date(row)
-        if tx_date:
-            self.period_label.setText(
-                f"{MONTH_NAMES[tx_date.month - 1]} {tx_date.year} · "
-                "internal transfer evidence"
+    def _preferred_bill_id(self, row: Any) -> int | None:
+        suggested = suggested_bill_instance(self.database, row)
+        if suggested is not None:
+            return int(suggested["id"])
+        review, ambiguous = best_review_candidate(
+            self.database, row, active_only=False
+        )
+        if review is not None and not ambiguous:
+            return int(review.bill_instance_id)
+        return None
+
+    def _render_link_state(self, row: Any) -> None:
+        self._show_payment_header(row)
+        disposition = row["reconciliation_disposition"]
+        internal_role = row["internal_transfer_role"]
+        amount = int(row["amount_cents"])
+
+        if internal_role == "destination":
+            self._render_card_receipt(row)
+            return
+        if int(row["pending"]):
+            self._set_link_state(
+                "Still pending at your bank",
+                "You can link it to a bill once it has posted.",
             )
-        else:
-            self.period_label.setText("Internal transfer evidence")
+            return
+        if disposition == "ignored":
+            self._set_link_state(
+                "Marked as not a bill",
+                "This payment will not be matched to any bill.",
+                undo="Undo",
+            )
+            return
+        if (disposition == "matched" or internal_role == "source") and not self._changing_link:
+            self._render_linked(row)
+            return
+        if amount <= 0:
+            self._set_link_state(
+                "Money coming in",
+                "Deposits, refunds and incoming transfers are not bill "
+                "payments, so there is nothing to link.",
+            )
+            return
 
-        expected = (
-            None
-            if bill is None
-            else expected_payment_cents(bill)
-        )
-        actual = abs(int(row["amount_cents"]))
-        existing_paid = (
-            None
-            if bill is None or bill["paid_cents"] is None
-            else int(bill["paid_cents"])
-        )
-        self.expected_value.setText(money(expected))
-        self.bank_value.setText(money(actual))
-        self.existing_paid_value.setText(money(existing_paid))
-        if expected is None:
-            self.difference_value.setText("—")
-        else:
-            difference = actual - expected
-            if difference == 0:
-                self.difference_value.setText("$0.00")
-            elif difference > 0:
-                self.difference_value.setText(
-                    "+" + money(difference)
-                )
-            else:
-                self.difference_value.setText(
-                    "-" + money(abs(difference))
-                )
+        if self._changing_link:
+            current = row["reconciled_bill_instance_id"] or row["internal_transfer_bill_instance_id"]
+            self._fill_bill_picker(row, None)
+            if current is not None:
+                index = self.target_bill.findData(int(current))
+                if index >= 0:
+                    self.target_bill.removeItem(index)
+            self._set_link_state(
+                "Pick the bill this payment should be linked to",
+                "The current link is replaced, and that bill goes back to "
+                "how it was before.",
+                picker=True,
+                accept=True,
+                undo="Cancel",
+            )
+            self._update_preview()
+            return
 
+        preferred = self._preferred_bill_id(row)
+        self._fill_bill_picker(row, preferred)
+        if preferred is not None:
+            chosen = self.target_bill.currentText().split(" · ")[0]
+            title = f"Looks like {chosen}"
+            detail = "Check the bill below and link it, or choose a different one."
+        else:
+            title = "Which bill is this payment for?"
+            detail = (
+                "Choose the bill below, or mark it as not a bill if it was "
+                "everyday spending."
+            )
+        self._set_link_state(title, detail, picker=True, accept=True, ignore=True)
+        self._update_preview()
+
+    def _render_linked(self, row: Any) -> None:
+        bill_id = row["reconciled_bill_instance_id"] or row["internal_transfer_bill_instance_id"]
+        bill = self.database.get_bill_instance(int(bill_id)) if bill_id is not None else None
+        name = str(
+            row["reconciled_bill_name"]
+            or row["internal_transfer_bill_name"]
+            or (bill["bill_name_snapshot"] if bill is not None else "a bill")
+        )
+        title = f"✓ Linked to {name}"
+        parts: list[str] = []
+        if bill is not None:
+            title += f" · {self._period_text(bill)}"
+            if bill["due_cents"] is not None:
+                parts.append(f"Bill amount {money(int(bill['due_cents']))}.")
+        if row["internal_transfer_role"] == "source":
+            destination_id = row["internal_transfer_destination_transaction_id"]
+            destination = (
+                self.database.get_bank_transaction(self._environment(), str(destination_id))
+                if destination_id else None
+            )
+            if destination is not None:
+                parts.append(
+                    "The same amount also arrived on "
+                    + self._account_text(
+                        destination["account_name"], destination["account_mask"], "the card"
+                    )
+                    + ", which confirms it."
+                )
+        self._set_link_state(
+            title,
+            " ".join(parts),
+            change=True,
+            undo="Unlink",
+        )
+
+    def _render_card_receipt(self, row: Any) -> None:
+        name = str(row["internal_transfer_bill_name"] or "a bill")
+        account = self._account_text(row["account_name"], row["account_mask"], "this account")
         source_id = row["internal_transfer_source_transaction_id"]
         source = (
-            self.database.get_bank_transaction(
-                self._environment(),
-                str(source_id),
-            )
-            if source_id
-            else None
+            self.database.get_bank_transaction(self._environment(), str(source_id))
+            if source_id else None
         )
         source_account = (
-            source["account_name"]
-            if source is not None and source["account_name"]
-            else "the configured Payment Account"
+            self._account_text(source["account_name"], source["account_mask"], "your checking")
+            if source is not None else "your checking"
         )
-        if (
-            source is not None
-            and source["account_mask"]
-        ):
-            source_account += f" ••••{source['account_mask']}"
-
-        self.warning.setText(
-            f"Verified internal payment for {bill_name}: "
-            f"{money(actual)} left {source_account} and the same amount "
-            f"arrived in {account}. The outgoing side is the bill payment; "
-            "this incoming side is retained as verification evidence. "
-            "Undo removes the pair and restores the bill's prior state."
+        self._set_link_state(
+            f"Payment received for {name}",
+            f"This is {account} receiving the payment. It confirms the "
+            f"{name} payment sent from {source_account}; that outgoing "
+            "payment is the one linked to the bill.",
+            undo="Unlink",
         )
-        self.action_status.setText("")
-        self.accept_button.setEnabled(False)
-        self.ignore_button.setEnabled(False)
-        self.undo_button.setEnabled(True)
 
+    def _start_changing_link(self) -> None:
+        row = self._selected_row()
+        if row is None:
+            return
+        self._changing_link = True
+        self._render_link_state(row)
 
     def _update_preview(self) -> None:
         row = self._selected_row()
         bill_instance_id = self.target_bill.currentData()
-        if row is None or bill_instance_id is None:
-            self.expected_value.setText("—")
-            self.bank_value.setText("—" if row is None else plaid_amount(int(row["amount_cents"])))
-            self.existing_paid_value.setText("—")
-            self.difference_value.setText("—")
+        if row is None or self.picker_box.isHidden():
+            return
+        if bill_instance_id is None:
+            self.compare_label.setText("")
+            self.accept_button.setText("Choose a bill first")
             self.accept_button.setEnabled(False)
+            self.warning.setVisible(False)
             return
 
         try:
             preview = build_preview(self.database, row, int(bill_instance_id))
         except ValueError as exc:
-            self.warning.setText(str(exc))
+            self.compare_label.setText(str(exc))
             self.accept_button.setEnabled(False)
             return
+        instance = self.database.get_bill_instance(int(bill_instance_id))
 
-        self.expected_value.setText(money(preview.due_cents))
-        self.bank_value.setText(money(preview.bank_amount_cents))
-        self.existing_paid_value.setText(money(preview.existing_paid_cents))
-        if preview.difference_cents is None:
-            self.difference_value.setText("—")
-        elif preview.difference_cents == 0:
-            self.difference_value.setText("$0.00")
-        elif preview.difference_cents > 0:
-            self.difference_value.setText("+" + money(preview.difference_cents))
+        lines: list[str] = []
+        payment = money(preview.bank_amount_cents)
+        if preview.due_cents is None:
+            lines.append(f"This payment: {payment}. The bill has no amount due set.")
         else:
-            self.difference_value.setText("-" + money(abs(preview.difference_cents)))
-
-        suggestion = suggested_bill_for_transaction(row)
-        duplicate_count = self._duplicate_candidate_count(row, suggestion) if suggestion else 0
-
-        messages: list[str] = []
+            diff = preview.bank_amount_cents - preview.due_cents
+            if diff == 0:
+                compare = "exactly the amount due"
+            elif diff > 0:
+                compare = f"{money(diff)} more than due"
+            else:
+                compare = f"{money(-diff)} less than due"
+            lines.append(
+                f"Bill: {money(preview.due_cents)} due  ·  This payment: "
+                f"{payment}  ({compare})"
+            )
         if preview.already_agrees:
-            messages.append("Existing Paid already agrees with the bank amount.")
+            lines.append("The bill's paid amount already matches this payment.")
         elif preview.existing_paid_cents is not None:
-            messages.append(
-                f"Existing Paid is {money(preview.existing_paid_cents)}; accepting will replace it "
-                f"with {money(preview.bank_amount_cents)}. Undo restores the previous value."
+            lines.append(
+                f"Linking changes the bill's paid amount from "
+                f"{money(preview.existing_paid_cents)} to {payment}."
             )
-        if duplicate_count > 1:
-            messages.append(
-                f"Warning: {duplicate_count} posted transactions in this pay period "
-                f"plausibly match {suggestion}. Review before accepting."
-            )
+        else:
+            lines.append(f"Linking marks the bill paid with {payment}.")
+        self.compare_label.setText("\n".join(lines))
 
-        if row["internal_transfer_role"] == "source":
-            destination_id = row[
-                "internal_transfer_destination_transaction_id"
-            ]
-            destination = (
-                self.database.get_bank_transaction(
-                    self._environment(),
-                    str(destination_id),
+        notes: list[str] = []
+        blocked = instance is not None and self._bill_taken_by_other(instance, row)
+        if blocked:
+            notes.append(
+                "That bill already has another bank payment linked. Unlink "
+                "that payment first (filter by \"Linked to a bill\"), or pick "
+                "a different bill."
+            )
+        if instance is not None:
+            bill_account = str(instance["payment_account_id"] or "")
+            if bill_account and bill_account != str(row["plaid_account_id"] or ""):
+                usual = self._account_text(
+                    instance["payment_account_name"],
+                    instance["payment_account_mask"],
+                    "another account",
                 )
-                if destination_id
-                else None
-            )
-            destination_account = (
-                destination["account_name"]
-                if (
-                    destination is not None
-                    and destination["account_name"]
+                notes.append(
+                    f"Heads up: this bill is normally paid from {usual}, "
+                    "but this payment came from a different account."
                 )
-                else "the credit/loan account"
-            )
-            if (
-                destination is not None
-                and destination["account_mask"]
-            ):
-                destination_account += (
-                    f" ••••{destination['account_mask']}"
+        suggestion = suggested_bill_for_transaction(row)
+        if suggestion:
+            others = self._duplicate_candidate_count(row, suggestion) - 1
+            if others > 0:
+                notes.append(
+                    f"{others} other payment(s) in this pay period also look "
+                    f"like {suggestion}. Make sure this is the right one."
                 )
-            messages.append(
-                "Verified by paired internal transfer: the same amount "
-                f"arrived in {destination_account}."
-            )
+        self.warning.setText("\n".join(notes))
+        self.warning.setVisible(bool(notes))
 
-        disposition = row["reconciliation_disposition"]
-        if disposition == "matched":
-            messages.append(f"Currently reconciled to {row['reconciled_bill_name']}.")
-        elif disposition == "ignored":
-            messages.append("This transaction is currently ignored.")
-
-        if not int(row["is_bills_checking"] or 0):
-            account = row["account_name"] or "this linked account"
-            if row["account_mask"]:
-                account += f" ••••{row['account_mask']}"
-            messages.append(
-                f"Payment came from {account}, not the Bills account. "
-                "That is valid for reconciliation and will not count as Bills-account funding."
-            )
-
-        self.warning.setText(" ".join(messages))
+        self.accept_button.setText(
+            f"{'Move link to' if self._changing_link else 'Link to'} {preview.bill_name}"
+        )
         self.accept_button.setEnabled(
-            not int(row["pending"]) and int(row["amount_cents"]) > 0
+            not blocked and not int(row["pending"]) and int(row["amount_cents"]) > 0
         )
 
     def _load_funding_transfer_panel(self, row: Any) -> None:
@@ -1718,16 +1773,23 @@ class TransactionsPage(QWidget):
             self.action_status.setText(str(exc))
             return
 
-        if preview.already_agrees:
-            self.action_status.setText(
-                f"Linked to {preview.bill_name}. The recorded amount already matched the bank."
-            )
-        else:
-            self.action_status.setText(
-                f"Linked to {preview.bill_name}. Paid amount is now {money(preview.bank_amount_cents)}."
-            )
+        self._after_link_change()
+        self.action_status.setText(
+            f"Linked to {preview.bill_name} ({self._period_text_for(preview)}). "
+            f"Its paid amount is {money(preview.bank_amount_cents)}."
+        )
+
+    def _after_link_change(self) -> None:
+        self._changing_link = False
         self.on_data_changed()
         self.refresh()
+        row = self._selected_row()
+        if row is not None:
+            self._render_link_state(row)
+
+    @staticmethod
+    def _period_text_for(preview: Any) -> str:
+        return f"{MONTH_NAMES[int(preview.month) - 1]} {int(preview.year)}, {preview.cycle} period"
 
     def _recheck_matches(self) -> None:
         from ..match_review import propose_match_corrections
@@ -1767,13 +1829,16 @@ class TransactionsPage(QWidget):
         except Exception as exc:
             self.action_status.setText(str(exc))
             return
+        self._after_link_change()
         self.action_status.setText("Marked as not a bill payment.")
-        self.on_data_changed()
-        self.refresh()
 
     def _undo(self) -> None:
         row = self._selected_row()
         if row is None:
+            return
+        if self._changing_link:
+            self._changing_link = False
+            self._render_link_state(row)
             return
         try:
             self.backup_manager.create_backup("pre-reconcile-undo")
@@ -1781,30 +1846,26 @@ class TransactionsPage(QWidget):
         except Exception as exc:
             self.action_status.setText(str(exc))
             return
+        self._after_link_change()
         self.action_status.setText(
-            "Undone. The bill's earlier paid amount and status were restored."
+            "Unlinked. The bill's earlier paid amount and status were restored."
         )
-        self.on_data_changed()
-        self.refresh()
 
     def _clear_reconciliation_panel(self) -> None:
         self.selected_transaction_id = None
+        self._changing_link = False
         self.reconcile_card.setVisible(True)
         self.funding_card.setVisible(False)
-        self.selected_label.setText("Pick a payment in the list above.")
+        self.selected_label.setText("Link a payment to a bill")
+        self.selected_meta.setText("")
         self.target_bill.blockSignals(True)
         self.target_bill.clear()
         self.target_bill.addItem("Choose a bill…", None)
         self.target_bill.blockSignals(False)
-        self.period_label.setText("")
-        self.expected_value.setText("—")
-        self.bank_value.setText("—")
-        self.existing_paid_value.setText("—")
-        self.difference_value.setText("—")
-        self.warning.setText("")
+        self._set_link_state(
+            "Pick a payment in the list above",
+            "Then link it to the bill it paid, or mark it as not a bill.",
+        )
         self.action_status.setText("")
-        self.accept_button.setEnabled(False)
-        self.ignore_button.setEnabled(False)
-        self.undo_button.setEnabled(False)
         self._clear_funding_transfer_panel()
         self._clear_transaction_detail()

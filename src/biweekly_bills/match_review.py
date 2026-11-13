@@ -241,17 +241,17 @@ def apply_match_correction(
     if holder is not None:
         database.undo_reconciliation(environment, str(holder[0]))
 
+    database.reconcile_transaction(
+        environment=environment,
+        plaid_transaction_id=tx_id,
+        bill_instance_id=correction.to_instance_id,
+    )
     if correction.evidence_transaction_id:
+        # The card-side receipt is attached after the payment is linked.
         database.record_internal_transfer_match(
             environment=environment,
             source_plaid_transaction_id=tx_id,
             destination_plaid_transaction_id=correction.evidence_transaction_id,
             bill_instance_id=correction.to_instance_id,
             amount_cents=correction.amount_cents,
-        )
-    else:
-        database.reconcile_transaction(
-            environment=environment,
-            plaid_transaction_id=tx_id,
-            bill_instance_id=correction.to_instance_id,
         )

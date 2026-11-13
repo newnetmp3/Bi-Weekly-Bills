@@ -195,12 +195,12 @@ class ReconciliationTests(unittest.TestCase):
         self.assertIsNone(db.get_bank_transaction("sandbox", "tx-verizon"))
         self.assertIsNone(db.get_reconciliation("sandbox", "tx-verizon"))
 
-    def test_candidates_are_limited_to_transaction_month_and_cycle(self):
+    def test_candidates_are_the_transaction_month_own_period_first(self):
         temp, db, instance_id, row = self._build_fixture()
         self.addCleanup(temp.cleanup)
 
         other_bill = db.upsert_bill(name="Cox", cycle="1st")
-        db.upsert_bill_instance(
+        cox_id = db.upsert_bill_instance(
             year=2026,
             month=9,
             cycle="1st",
@@ -218,8 +218,13 @@ class ReconciliationTests(unittest.TestCase):
             due_cents=5000,
         )
 
+        # Same month: own period first, then the other period. October is not
+        # offered because the payment is not near the end of September.
         candidates = candidate_bill_instances(db, row)
-        self.assertEqual([int(candidate["id"]) for candidate in candidates], [instance_id])
+        self.assertEqual(
+            [int(candidate["id"]) for candidate in candidates],
+            [instance_id, cox_id],
+        )
 
 
 if __name__ == "__main__":
