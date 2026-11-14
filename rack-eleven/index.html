@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Rack Eleven</title>
+<meta name="description" content="Elevens solitaire played with billiard balls. Pair balls that add up to 11 and clear the rack.">
+<style>
+  :root{--felt:#0f6b3f;--felt-dark:#094a2b;--wood:#5a3216;--wood-light:#8a5428;--ink:#f4efe2;--gold:#ffd54a;--bad:#ff5a4a}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;min-height:100%}
+  body{background:radial-gradient(ellipse at top,#23302a,#0b100d 70%);color:var(--ink);
+       font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;justify-content:center;
+       user-select:none;-webkit-user-select:none;touch-action:manipulation}
+  .wrap{width:min(100%,460px);padding:12px 16px 24px}
+  h1{margin:4px 0 2px;text-align:center;font-size:28px;letter-spacing:.06em;font-weight:900;color:var(--gold);
+     text-shadow:0 2px 0 #7a5200,0 4px 10px #000}
+  .tag{text-align:center;margin:0 0 10px;font-size:13px;opacity:.75}
+  .hud{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px}
+  .stat{background:#0006;border:1px solid #fff2;border-radius:10px;padding:5px 4px;text-align:center}
+  .stat b{display:block;font-size:19px;font-variant-numeric:tabular-nums}
+  .stat small{font-size:10px;text-transform:uppercase;letter-spacing:.08em;opacity:.7}
+  .msg{text-align:center;min-height:22px;font-weight:700;margin-bottom:8px;transition:color .15s}
+  .msg.bad{color:var(--bad);animation:shake .3s}
+  .msg.good{color:var(--gold)}
+  @keyframes shake{25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}
+
+  .rail{background:linear-gradient(var(--wood-light),var(--wood));padding:12px;border-radius:18px;
+        box-shadow:inset 0 2px 0 #ffffff30,0 10px 30px #000a}
+  .table{position:relative;border-radius:8px;overflow:hidden;container-type:inline-size;padding:5%;
+         background:radial-gradient(ellipse at 50% 40%,var(--felt),var(--felt-dark));box-shadow:inset 0 0 30px #0009}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4%}
+  .cell{position:relative;aspect-ratio:1;border-radius:50%;background:radial-gradient(#0004,#0000 70%)}
+  .ball{position:absolute;inset:4%;cursor:pointer;animation:drop .35s cubic-bezier(.45,.05,.55,1.3)}
+  @keyframes drop{from{transform:translateY(-60%) scale(.4);opacity:0}}
+  .orb{position:absolute;inset:0;border-radius:50%;
+       background:radial-gradient(circle at 32% 26%,#fffc 0,#fff0 26%),radial-gradient(circle at 50% 50%,#0000 52%,#0007 100%),var(--c);
+       box-shadow:0 5px 8px #0008;transition:transform .12s,box-shadow .12s,opacity .3s}
+  .stripe .orb{background:radial-gradient(circle at 32% 26%,#fffc 0,#fff0 26%),radial-gradient(circle at 50% 50%,#0000 52%,#0007 100%),
+       linear-gradient(#f5efe0 0 23%,var(--c) 23% 77%,#f5efe0 77%)}
+  .orb span{position:absolute;left:50%;top:50%;width:46%;height:46%;transform:translate(-50%,-50%);border-radius:50%;
+            background:#fbf8ef;color:#111;display:grid;place-items:center;font-weight:900;
+            font-size:calc(100cqw / 3 * .17);box-shadow:inset 0 -1px 2px #0003}
+  .ball.sel .orb{transform:scale(1.07);box-shadow:0 0 0 4px #fff,0 0 22px 6px var(--gold)}
+  .ball.hint .orb{animation:pulse .7s ease-in-out 3}
+  @keyframes pulse{50%{box-shadow:0 0 0 4px #7ff,0 0 24px 8px #7ff}}
+  .ball.sink .orb{transform:scale(.1) rotate(200deg);opacity:0;transition:transform .3s ease-in,opacity .3s ease-in}
+  .float{position:absolute;pointer-events:none;font-weight:900;color:var(--gold);font-size:calc(100cqw * .08);
+         text-shadow:0 2px 4px #000;transform:translate(-50%,-50%);animation:rise 1s ease-out forwards;z-index:3}
+  @keyframes rise{to{transform:translate(-50%,-160%);opacity:0}}
+
+  .tray{display:flex;align-items:center;gap:10px;margin:12px 0 10px}
+  .tray .label{font-size:12px;opacity:.85;white-space:nowrap}
+  .tube{flex:1;height:14px;border-radius:7px;background:#0007;border:1px solid #fff2;overflow:hidden}
+  .tube i{display:block;height:100%;background:linear-gradient(90deg,#f4c20d,#d7261e,#1d4fc4);transition:width .3s}
+  .rules{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px;font-size:12px;text-align:center}
+  .rules div{background:#0005;border:1px solid #fff1;border-radius:10px;padding:6px 4px}
+  .rules b{display:block;color:var(--gold);font-size:14px}
+  .btns{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+  button{font:inherit;font-weight:700;font-size:14px;border:0;border-radius:10px;padding:11px 4px;background:#e9e2cf;color:#222;
+         cursor:pointer;box-shadow:0 3px 0 #9b927a}
+  button:active{transform:translateY(2px);box-shadow:0 1px 0 #9b927a}
+  button.primary{background:var(--gold);box-shadow:0 3px 0 #a7861a}
+  .overlay{position:absolute;inset:0;background:#000c;display:none;flex-direction:column;align-items:center;justify-content:center;
+           text-align:center;padding:20px;z-index:5}
+  .overlay.show{display:flex}
+  .overlay h2{margin:0 0 6px;color:var(--gold);font-size:calc(100cqw * .1)}
+  .overlay p{margin:4px 0;font-size:calc(100cqw * .05)}
+  .overlay button{margin-top:14px;padding:12px 26px;font-size:17px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>RACK ELEVEN</h1>
+  <p class="tag">Elevens solitaire with billiard balls</p>
+
+  <div class="hud">
+    <div class="stat"><b id="score">0</b><small>Score</small></div>
+    <div class="stat"><b id="best">0</b><small>Best</small></div>
+    <div class="stat"><b id="left">0</b><small>Rack</small></div>
+    <div class="stat"><b id="time">0:00</b><small>Time</small></div>
+  </div>
+
+  <div class="rules">
+    <div><b>Pair = 11</b>1–10 balls</div>
+    <div><b>11</b>sinks alone</div>
+    <div><b>12·13·14</b>sink together</div>
+  </div>
+
+  <div class="msg" id="msg">Tap balls to make a shot</div>
+
+  <div class="rail">
+    <div class="table" id="table">
+      <div class="grid" id="grid"></div>
+      <div class="overlay" id="over">
+        <h2 id="overTitle">Game Over</h2>
+        <p id="overMsg"></p>
+        <p id="overBest"></p>
+        <button class="primary" id="again">Play Again</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="tray"><span class="label">Balls left</span><div class="tube"><i id="tube"></i></div></div>
+
+  <div class="btns">
+    <button class="primary" id="newBtn">New</button>
+    <button id="clearBtn">Clear</button>
+    <button id="hintBtn">Hint</button>
+    <button id="soundBtn">Sound</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  const SLOTS = 9, COMBO_WINDOW = 4000;
+  const TRIO = [12, 13, 14];
+  const COLORS = {1:'#f4c20d',2:'#1d4fc4',3:'#d7261e',4:'#5d2b8c',5:'#f2760f',6:'#147a3c',7:'#7b1c1c',8:'#161616',
+                  9:'#f4c20d',10:'#1d4fc4',11:'#d7261e',12:'#5d2b8c',13:'#f2760f',14:'#147a3c'};
+  const $ = id => document.getElementById(id);
+  const gridEl = $('grid'), table = $('table');
+
+  let slots, rack, total, selected, score, best = 0, busy, over, startTime, timerId, combo, lastShot, soundOn = true;
+  try { best = +localStorage.getItem('rack11-best') || 0; } catch (e) {}
+  try { soundOn = localStorage.getItem('rack11-sound') !== 'off'; } catch (e) {}
+
+  /* ---------- sound ---------- */
+  let actx;
+  function tone(f, d, type = 'sine', v = .15, slide = 0) {
+    if (!soundOn) return;
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+      o.type = type; o.frequency.setValueAtTime(f, t);
+      if (slide) o.frequency.exponentialRampToValueAtTime(slide, t + d);
+      g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(.001, t + d);
+      o.connect(g).connect(actx.destination); o.start(t); o.stop(t + d);
+    } catch (e) {}
+  }
+  const sfx = {
+    click: () => tone(900, .05, 'triangle', .12),
+    clack: () => { tone(1400, .04, 'square', .08); setTimeout(() => tone(300, .25, 'sine', .2, 90), 40); },
+    bad: () => tone(140, .25, 'sawtooth', .1),
+    win: () => [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => tone(f, .25, 'triangle', .15), i * 120)),
+    lose: () => [392, 330, 262].forEach((f, i) => setTimeout(() => tone(f, .3, 'triangle', .13), i * 160)),
+  };
+
+  /* ---------- rack: 4 of each 1-14 = 56 balls ---------- */
+  function buildRack() {
+    const r = [];
+    for (let v = 1; v <= 14; v++) for (let i = 0; i < 4; i++) r.push(v);
+    for (let i = r.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [r[i], r[j]] = [r[j], r[i]]; }
+    return r;
+  }
+
+  function makeBall(v, idx) {
+    const el = document.createElement('div');
+    el.className = 'ball' + (v > 8 ? ' stripe' : '');
+    el.style.setProperty('--c', COLORS[v]);
+    el.innerHTML = `<div class="orb"><span>${v}</span></div>`;
+    const b = { v, idx, el };
+    el.addEventListener('pointerdown', e => { e.preventDefault(); tap(b); });
+    return b;
+  }
+
+  function deal(idx) {
+    const cell = gridEl.children[idx];
+    if (!rack.length) { slots[idx] = null; return; }
+    const b = makeBall(rack.pop(), idx);
+    slots[idx] = b; cell.appendChild(b.el);
+  }
+
+  function newGame() {
+    $('over').classList.remove('show');
+    gridEl.innerHTML = '';
+    for (let i = 0; i < SLOTS; i++) { const c = document.createElement('div'); c.className = 'cell'; gridEl.appendChild(c); }
+    table.querySelectorAll('.float').forEach(n => n.remove());
+    rack = buildRack(); total = rack.length;
+    slots = Array(SLOTS).fill(null);
+    selected = []; score = 0; combo = 0; lastShot = 0; busy = false; over = false;
+    for (let i = 0; i < SLOTS; i++) deal(i);
+    startTime = Date.now(); clearInterval(timerId); timerId = setInterval(updateTime, 500);
+    say('Tap balls to make a shot');
+    updateHud();
+    setTimeout(checkEnd, 400);
+  }
+
+  /* ---------- rules ---------- */
+  // 'ok' = complete shot, 'partial' = could still become a shot, 'bad' = can't
+  function judge(sel) {
+    const vs = sel.map(b => b.v);
+    if (vs.length === 1 && vs[0] === 11) return 'ok';
+    if (vs.includes(11)) return 'bad';
+    if (vs.every(v => v <= 10)) {
+      if (vs.length === 1) return 'partial';
+      return vs.length === 2 && vs[0] + vs[1] === 11 ? 'ok' : 'bad';
+    }
+    if (vs.every(v => TRIO.includes(v)) && new Set(vs).size === vs.length) return vs.length === 3 ? 'ok' : 'partial';
+    return 'bad';
+  }
+
+  function findShot() {
+    const live = slots.filter(Boolean);
+    const eleven = live.find(b => b.v === 11);
+    if (eleven) return [eleven];
+    for (let i = 0; i < live.length; i++)
+      for (let j = i + 1; j < live.length; j++)
+        if (live[i].v <= 10 && live[i].v + live[j].v === 11) return [live[i], live[j]];
+    const trio = TRIO.map(v => live.find(b => b.v === v));
+    return trio.every(Boolean) ? trio : null;
+  }
+
+  /* ---------- play ---------- */
+  function tap(b) {
+    if (busy || over) return;
+    gridEl.querySelectorAll('.hint').forEach(n => n.classList.remove('hint'));
+    if (selected.includes(b)) { selected = selected.filter(x => x !== b); b.el.classList.remove('sel'); sfx.click(); describe(); return; }
+    selected.push(b); b.el.classList.add('sel');
+    const j = judge(selected);
+    if (j === 'ok') shoot();
+    else if (j === 'bad') {
+      sfx.bad(); say(badReason(), 'bad'); busy = true;
+      setTimeout(() => { clearSel(); busy = false; }, 450);
+    } else { sfx.click(); describe(); }
+  }
+
+  function badReason() {
+    const vs = selected.map(b => b.v);
+    if (vs.every(v => v <= 10)) return `${vs.join(' + ')} = ${vs.reduce((a, b) => a + b, 0)} — not 11`;
+    return 'That’s not a legal shot';
+  }
+
+  function describe() {
+    const vs = selected.map(b => b.v);
+    if (!vs.length) return say('Tap balls to make a shot');
+    if (vs.every(v => v <= 10)) return say(`${vs[0]} + ? — need a ${11 - vs[0]}`);
+    say(`Need ${TRIO.filter(v => !vs.includes(v)).join(' & ')} to finish the set`);
+  }
+
+  function clearSel() { selected.forEach(b => b.el.classList.remove('sel')); selected = []; describe(); }
+
+  function shoot() {
+    busy = true;
+    const shot = selected; selected = [];
+    const now = Date.now();
+    combo = lastShot && now - lastShot < COMBO_WINDOW ? Math.min(combo + 1, 5) : 1;
+    lastShot = now;
+    const base = shot.length === 3 ? 300 : shot.length === 2 ? 110 : 55;
+    const pts = base * combo;
+    score += pts;
+    sfx.clack();
+    say(combo > 1 ? `Nice shot! Combo x${combo}` : 'Nice shot!', 'good');
+
+    const tr = table.getBoundingClientRect();
+    let x = 0, y = 0;
+    shot.forEach(b => { const r = b.el.getBoundingClientRect(); x += r.left + r.width / 2 - tr.left; y += r.top + r.height / 2 - tr.top; });
+    floatText(`+${pts}`, x / shot.length, y / shot.length);
+
+    shot.forEach(b => { b.el.classList.remove('sel'); b.el.classList.add('sink'); });
+    updateHud();
+    setTimeout(() => {
+      shot.forEach(b => { b.el.remove(); slots[b.idx] = null; });
+      shot.forEach(b => deal(b.idx));
+      updateHud();
+      setTimeout(() => { busy = false; checkEnd(); }, 380);
+    }, 300);
+  }
+
+  function checkEnd() {
+    if (over) return;
+    if (!slots.some(Boolean)) {
+      const secs = (Date.now() - startTime) / 1000 | 0;
+      const timeBonus = Math.max(0, 600 - secs) * 5;
+      score += 1000 + timeBonus;
+      finish('Rack Cleared!', `Bonus +${(1000 + timeBonus).toLocaleString()}`); sfx.win();
+    } else if (!findShot()) {
+      const left = slots.filter(Boolean).length + rack.length;
+      finish('No More Shots', `${left} balls left`); sfx.lose();
+    }
+  }
+
+  function finish(title, msg) {
+    over = true; clearInterval(timerId);
+    const nb = score > best;
+    if (nb) { best = score; try { localStorage.setItem('rack11-best', best); } catch (e) {} }
+    updateHud();
+    $('overTitle').textContent = title;
+    $('overMsg').textContent = `${msg} · Score ${score.toLocaleString()}`;
+    $('overBest').textContent = nb ? 'New best score!' : `Best: ${best.toLocaleString()}`;
+    $('over').classList.add('show');
+  }
+
+  function hint() {
+    if (busy || over) return;
+    clearSel();
+    const s = findShot();
+    if (!s) return checkEnd();
+    score = Math.max(0, score - 50); updateHud();
+    s.forEach(b => { b.el.classList.remove('hint'); void b.el.offsetWidth; b.el.classList.add('hint'); });
+    say('Hint: −50 points');
+  }
+
+  function floatText(t, x, y) {
+    const f = document.createElement('div');
+    f.className = 'float'; f.textContent = t; f.style.left = x + 'px'; f.style.top = y + 'px';
+    table.appendChild(f); setTimeout(() => f.remove(), 1000);
+  }
+
+  function say(t, cls) { const m = $('msg'); m.textContent = t; m.className = 'msg' + (cls ? ' ' + cls : ''); }
+  function updateHud() {
+    $('score').textContent = score.toLocaleString();
+    $('best').textContent = Math.max(best, score).toLocaleString();
+    $('left').textContent = rack.length;
+    $('tube').style.width = (rack.length / total * 100) + '%';
+  }
+  function updateTime() {
+    const s = (Date.now() - startTime) / 1000 | 0;
+    $('time').textContent = `${s / 60 | 0}:${String(s % 60).padStart(2, '0')}`;
+  }
+  function updateSoundBtn() { $('soundBtn').textContent = soundOn ? 'Sound: On' : 'Sound: Off'; }
+
+  $('newBtn').onclick = newGame;
+  $('again').onclick = newGame;
+  $('clearBtn').onclick = () => { if (!busy) clearSel(); };
+  $('hintBtn').onclick = hint;
+  $('soundBtn').onclick = () => {
+    soundOn = !soundOn; updateSoundBtn();
+    try { localStorage.setItem('rack11-sound', soundOn ? 'on' : 'off'); } catch (e) {}
+  };
+  updateSoundBtn();
+  newGame();
+})();
+</script>
+</body>
+</html>
