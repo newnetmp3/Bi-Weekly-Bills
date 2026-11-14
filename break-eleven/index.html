@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Break Eleven</title>
+<meta name="description" content="Billiard balls roll onto the table — tap the ones that add up to 11 to sink them before the table overflows.">
+<style>
+  :root{--ink:#f4efe2;--gold:#ffd54a;--bad:#ff5a4a;--cyan:#6ff0ff}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;min-height:100%}
+  body{background:radial-gradient(ellipse at top,#1d2a3a,#070a10 70%);color:var(--ink);
+       font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;justify-content:center;
+       user-select:none;-webkit-user-select:none;touch-action:manipulation}
+  .wrap{width:min(100%,480px);padding:10px 16px 20px}
+  header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+  h1{margin:0;font-size:26px;font-weight:900;letter-spacing:.04em;color:var(--gold);
+     text-shadow:0 2px 0 #7a5200,0 4px 10px #000}
+  h1 small{display:block;font-size:11px;letter-spacing:.12em;color:var(--ink);opacity:.6;text-shadow:none;font-weight:600}
+  .icon{width:40px;height:40px;border-radius:50%;padding:0;font-size:18px}
+  .hud{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px}
+  .stat{background:#0007;border:1px solid #fff2;border-radius:10px;padding:5px 4px;text-align:center}
+  .stat b{display:block;font-size:18px;font-variant-numeric:tabular-nums}
+  .stat small{font-size:10px;text-transform:uppercase;letter-spacing:.08em;opacity:.7}
+  .sumbar{display:flex;align-items:center;gap:10px;margin-bottom:8px;background:#0007;border:1px solid #fff2;
+          border-radius:10px;padding:6px 10px}
+  .sum{font-size:22px;font-weight:900;font-variant-numeric:tabular-nums;min-width:58px}
+  .sum.bad{color:var(--bad);animation:shake .3s}.sum.good{color:var(--gold)}
+  @keyframes shake{25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}
+  .meter{flex:1;height:12px;border-radius:6px;background:#0008;border:1px solid #fff2;overflow:hidden}
+  .meter i{display:block;height:100%;width:0;background:linear-gradient(90deg,#3fd17a,#ffd54a 60%,#ff5a4a);transition:width .25s}
+  .meterlbl{font-size:10px;letter-spacing:.08em;text-transform:uppercase;opacity:.7}
+  .combo{font-weight:900;color:var(--gold);font-size:13px;min-width:62px;text-align:right}
+  .stage{position:relative}
+  canvas{display:block;width:100%;height:auto;border-radius:16px;box-shadow:0 12px 30px #000c;touch-action:none}
+  .overlay{position:absolute;inset:0;background:#000c;border-radius:16px;display:none;flex-direction:column;
+           align-items:center;justify-content:center;text-align:center;padding:20px}
+  .overlay.show{display:flex}
+  .overlay h2{margin:0 0 8px;color:var(--gold);font-size:32px}
+  .overlay p{margin:4px 0;font-size:16px;line-height:1.45;max-width:320px}
+  .overlay b{color:var(--gold)}
+  button{font:inherit;font-weight:700;font-size:14px;border:0;border-radius:10px;padding:11px 6px;background:#e9e2cf;color:#222;
+         cursor:pointer;box-shadow:0 3px 0 #9b927a}
+  button:active{transform:translateY(2px);box-shadow:0 1px 0 #9b927a}
+  button.primary{background:var(--gold);box-shadow:0 3px 0 #a7861a}
+  .overlay button{margin-top:16px;padding:12px 30px;font-size:17px}
+  .btns{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>BREAK ELEVEN<small>SINK THE SUM OF 11</small></h1>
+    <button class="icon" id="soundBtn" title="Sound">🔊</button>
+  </header>
+
+  <div class="hud">
+    <div class="stat"><b id="score">0</b><small>Score</small></div>
+    <div class="stat"><b id="best">0</b><small>Best</small></div>
+    <div class="stat"><b id="level">1</b><small>Level</small></div>
+    <div class="stat"><b id="sunk">0</b><small>Sunk</small></div>
+  </div>
+
+  <div class="sumbar">
+    <span class="sum" id="sum">0</span>
+    <span class="meterlbl">Table</span>
+    <div class="meter"><i id="meter"></i></div>
+    <span class="combo" id="combo"></span>
+  </div>
+
+  <div class="stage">
+    <canvas id="cv" width="420" height="600"></canvas>
+    <div class="overlay show" id="over">
+      <h2 id="overTitle">Break Eleven</h2>
+      <p id="overMsg">Balls keep rolling onto the table. Tap balls that add up to <b>11</b> to sink them.
+        The <b>11</b> ball sinks by itself. Sink more balls in one shot for bigger points.
+        Don't let the table fill up!</p>
+      <p id="overBest"></p>
+      <button class="primary" id="startBtn">Break!</button>
+    </div>
+  </div>
+
+  <div class="btns">
+    <button id="clearBtn">Clear</button>
+    <button id="hintBtn">Hint (−50)</button>
+    <button id="pauseBtn">Pause</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  /* ---------- constants ---------- */
+  const W = 420, H = 600, R = 19, TAU = Math.PI * 2, TARGET = 11;
+  const T = { x0: 34, y0: 34, x1: W - 34, y1: 476 };        // felt playfield
+  const POCKETS = [[T.x0 - 4, T.y0 - 4], [W / 2, T.y0 - 10], [T.x1 + 4, T.y0 - 4],
+                   [T.x0 - 4, T.y1 + 4], [W / 2, T.y1 + 10], [T.x1 + 4, T.y1 + 4]];
+  const CAPACITY = 34;
+  const COL = {1:'#f4c20d',2:'#1d4fc4',3:'#d7261e',4:'#5d2b8c',5:'#f2760f',6:'#147a3c',
+               7:'#7b1c1c',8:'#151515',9:'#f4c20d',10:'#1d4fc4',11:'#d7261e'};
+
+  const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+  const $ = id => document.getElementById(id);
+  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  cv.width = W * dpr; cv.height = H * dpr; ctx.scale(dpr, dpr);
+
+  /* ---------- ball sprites ---------- */
+  const sprites = {};
+  function makeSprite(v) {
+    const s = (R * 2 + 4) * dpr, c = document.createElement('canvas'); c.width = c.height = s;
+    const g = c.getContext('2d'); g.scale(dpr, dpr);
+    const x = R + 2, y = R + 2;
+    g.save(); g.beginPath(); g.arc(x, y, R, 0, TAU); g.clip();
+    if (v > 8) {
+      g.fillStyle = '#f5efe0'; g.fillRect(0, 0, 2 * R + 4, 2 * R + 4);
+      g.fillStyle = COL[v]; g.fillRect(0, y - R * .55, 2 * R + 4, R * 1.1);
+    } else { g.fillStyle = COL[v]; g.fillRect(0, 0, 2 * R + 4, 2 * R + 4); }
+    // number disc
+    g.fillStyle = '#fbf8ef'; g.beginPath(); g.arc(x, y, R * .48, 0, TAU); g.fill();
+    g.fillStyle = '#111'; g.font = `900 ${v > 9 ? R * .62 : R * .72}px system-ui,Arial,sans-serif`;
+    g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(v, x, y + 1);
+    // shading + highlight
+    const sh = g.createRadialGradient(x - R * .35, y - R * .45, R * .05, x, y, R * 1.05);
+    sh.addColorStop(0, 'rgba(255,255,255,.75)'); sh.addColorStop(.22, 'rgba(255,255,255,.12)');
+    sh.addColorStop(.6, 'rgba(0,0,0,0)'); sh.addColorStop(1, 'rgba(0,0,0,.5)');
+    g.fillStyle = sh; g.fillRect(0, 0, 2 * R + 4, 2 * R + 4);
+    g.restore();
+    return c;
+  }
+  for (let v = 1; v <= 11; v++) sprites[v] = makeSprite(v);
+  function drawBall(v, x, y, scale = 1, alpha = 1) {
+    const s = (R + 2) * scale;
+    ctx.globalAlpha = alpha * .4; ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.ellipse(x + 3 * scale, y + 6 * scale, R * scale, R * .85 * scale, 0, 0, TAU); ctx.fill();
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(sprites[v], x - s, y - s, s * 2, s * 2);
+    ctx.globalAlpha = 1;
+  }
+
+  /* ---------- table background (pre-rendered) ---------- */
+  const bg = document.createElement('canvas'); bg.width = W * dpr; bg.height = H * dpr;
+  (function paintTable() {
+    const g = bg.getContext('2d'); g.scale(dpr, dpr);
+    // rail
+    const wood = g.createLinearGradient(0, 0, 0, 500);
+    wood.addColorStop(0, '#8a5428'); wood.addColorStop(1, '#4a2810');
+    g.fillStyle = wood; roundRect(g, 4, 4, W - 8, 500, 22); g.fill();
+    g.fillStyle = '#ffffff22'; roundRect(g, 4, 4, W - 8, 3, 2); g.fill();
+    // cushions
+    g.fillStyle = '#0a5a33'; roundRect(g, T.x0 - 12, T.y0 - 12, T.x1 - T.x0 + 24, T.y1 - T.y0 + 24, 10); g.fill();
+    // felt
+    const felt = g.createRadialGradient(W / 2, 230, 30, W / 2, 250, 300);
+    felt.addColorStop(0, '#18915a'); felt.addColorStop(1, '#0a5532');
+    g.fillStyle = felt; g.fillRect(T.x0, T.y0, T.x1 - T.x0, T.y1 - T.y0);
+    // felt texture
+    for (let i = 0; i < 2200; i++) {
+      g.fillStyle = Math.random() < .5 ? '#ffffff08' : '#00000010';
+      g.fillRect(T.x0 + Math.random() * (T.x1 - T.x0), T.y0 + Math.random() * (T.y1 - T.y0), 1, 1);
+    }
+    // markings
+    g.strokeStyle = '#ffffff22'; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(T.x0, T.y0 + (T.y1 - T.y0) * .75); g.lineTo(T.x1, T.y0 + (T.y1 - T.y0) * .75); g.stroke();
+    g.fillStyle = '#ffffff40';
+    [[W / 2, T.y0 + (T.y1 - T.y0) * .25], [W / 2, T.y0 + (T.y1 - T.y0) * .75]].forEach(([x, y]) => { g.beginPath(); g.arc(x, y, 3, 0, TAU); g.fill(); });
+    // diamonds
+    g.fillStyle = '#f3e6c4';
+    for (let i = 1; i < 4; i++) {
+      const x = T.x0 + (T.x1 - T.x0) * i / 4;
+      [T.y0 - 22, T.y1 + 22].forEach(y => diamond(g, x, y));
+    }
+    for (let i = 1; i < 8; i++) {
+      if (i === 4) continue;
+      const y = T.y0 + (T.y1 - T.y0) * i / 8;
+      [T.x0 - 22, T.x1 + 22].forEach(x => diamond(g, x, y));
+    }
+    // pockets
+    POCKETS.forEach(([x, y]) => {
+      const pg = g.createRadialGradient(x, y, 2, x, y, 22);
+      pg.addColorStop(0, '#000'); pg.addColorStop(.75, '#050505'); pg.addColorStop(1, '#2a1a0a');
+      g.fillStyle = pg; g.beginPath(); g.arc(x, y, 22, 0, TAU); g.fill();
+    });
+    // ball-return tray
+    const tray = g.createLinearGradient(0, 512, 0, 592);
+    tray.addColorStop(0, '#1b1b1f'); tray.addColorStop(1, '#2d2d33');
+    g.fillStyle = tray; roundRect(g, 4, 512, W - 8, 82, 18); g.fill();
+    g.fillStyle = '#0008'; roundRect(g, 14, 532, W - 28, 52, 26); g.fill();
+    g.fillStyle = '#ffd54a'; g.font = '700 11px system-ui,sans-serif'; g.textAlign = 'left';
+    g.fillText('ON DECK', 18, 526);
+    // feeder slot
+    g.fillStyle = '#000'; roundRect(g, W / 2 - 26, T.y1 + 6, 52, 14, 7); g.fill();
+  })();
+  function roundRect(g, x, y, w, h, r) { g.beginPath(); g.roundRect ? g.roundRect(x, y, w, h, r) : g.rect(x, y, w, h); }
+  function diamond(g, x, y) { g.beginPath(); g.moveTo(x, y - 4); g.lineTo(x + 3, y); g.lineTo(x, y + 4); g.lineTo(x - 3, y); g.closePath(); g.fill(); }
+
+  /* ---------- sound ---------- */
+  let soundOn = true, actx;
+  try { soundOn = localStorage.getItem('break11-sound') !== 'off'; } catch (e) {}
+  function tone(f, d, type = 'sine', v = .15, slide = 0) {
+    if (!soundOn) return;
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+      o.type = type; o.frequency.setValueAtTime(f, t);
+      if (slide) o.frequency.exponentialRampToValueAtTime(slide, t + d);
+      g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(.001, t + d);
+      o.connect(g).connect(actx.destination); o.start(t); o.stop(t + d);
+    } catch (e) {}
+  }
+  let lastKnock = 0;
+  const sfx = {
+    click: () => tone(900, .05, 'triangle', .12),
+    knock: s => { const n = performance.now(); if (n - lastKnock > 45) { lastKnock = n; tone(1600 + Math.random() * 400, .03, 'square', Math.min(.06, s * .012)); } },
+    sink: () => { tone(1400, .04, 'square', .08); setTimeout(() => tone(260, .3, 'sine', .22, 70), 50); },
+    bad: () => tone(140, .25, 'sawtooth', .1),
+    level: () => [660, 880].forEach((f, i) => setTimeout(() => tone(f, .18, 'triangle', .14), i * 110)),
+    lose: () => [392, 330, 262, 196].forEach((f, i) => setTimeout(() => tone(f, .3, 'triangle', .13), i * 170)),
+  };
+
+  /* ---------- state ---------- */
+  let balls, queue, bag, sinking, floats, selected, score, best = 0, sunk, level, combo, lastShot,
+      spawnTimer, running = false, paused = false, ended = false, nextId = 1, hintUntil = 0, hintSet = [];
+  try { best = +localStorage.getItem('break11-best') || 0; } catch (e) {}
+
+  // bag of balls built from complementary pairs + 11s, so 11s are always reachable
+  function draw() {
+    if (!bag.length) {
+      for (let a = 1; a <= 5; a++) bag.push(a, TARGET - a);
+      bag.push(TARGET, TARGET);
+      for (let i = bag.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [bag[i], bag[j]] = [bag[j], bag[i]]; }
+    }
+    return bag.pop();
+  }
+
+  function addBall(v, x, y, vx, vy) { const b = { id: nextId++, v, x, y, vx, vy }; balls.push(b); return b; }
+
+  function feed() {
+    const v = queue.shift(); queue.push(draw());
+    addBall(v, W / 2 + (Math.random() - .5) * 20, T.y1 - R - 1, (Math.random() - .5) * 6, -(8 + Math.random() * 4));
+    tone(500, .08, 'triangle', .06, 700);
+  }
+
+  function newGame() {
+    balls = []; sinking = []; floats = []; selected = []; bag = []; queue = [];
+    score = 0; sunk = 0; level = 1; combo = 0; lastShot = 0; ended = false; paused = false;
+    for (let i = 0; i < 8; i++) queue.push(draw());
+    // opening rack: a triangle of 15 balls
+    let k = 0;
+    for (let row = 0; row < 5; row++)
+      for (let i = 0; i <= row; i++, k++) {
+        const x = W / 2 + (i - row / 2) * (R * 2 + 1), y = 120 + row * (R * 1.75);
+        addBall(draw(), x, y, 0, 0);
+      }
+    // the "break"
+    setTimeout(() => {
+      balls.forEach(b => { const a = Math.atan2(b.y - 160, b.x - W / 2) + (Math.random() - .5) * .6; const s = 4 + Math.random() * 6; b.vx = Math.cos(a) * s; b.vy = Math.sin(a) * s; });
+      tone(2000, .05, 'square', .1); tone(180, .2, 'sine', .2, 60);
+    }, 350);
+    spawnTimer = spawnInterval() + 1200;
+    running = true;
+    $('over').classList.remove('show');
+    $('pauseBtn').textContent = 'Pause';
+    updateHud(); updateSum();
+  }
+
+  const spawnInterval = () => Math.max(900, 3400 - (level - 1) * 260);
+
+  /* ---------- physics ---------- */
+  function step(k) {
+    const n = balls.length;
+    for (const b of balls) {
+      b.x += b.vx * k; b.y += b.vy * k;
+      const f = Math.pow(.982, k); b.vx *= f; b.vy *= f;
+      if (Math.abs(b.vx) < .02) b.vx = 0; if (Math.abs(b.vy) < .02) b.vy = 0;
+      if (b.x < T.x0 + R) { b.x = T.x0 + R; b.vx = Math.abs(b.vx) * .8; }
+      if (b.x > T.x1 - R) { b.x = T.x1 - R; b.vx = -Math.abs(b.vx) * .8; }
+      if (b.y < T.y0 + R) { b.y = T.y0 + R; b.vy = Math.abs(b.vy) * .8; }
+      if (b.y > T.y1 - R) { b.y = T.y1 - R; b.vy = -Math.abs(b.vy) * .8; }
+    }
+    for (let i = 0; i < n; i++) {
+      const a = balls[i];
+      for (let j = i + 1; j < n; j++) {
+        const b = balls[j];
+        const dx = b.x - a.x, dy = b.y - a.y, d2 = dx * dx + dy * dy, min = R * 2;
+        if (d2 >= min * min || d2 === 0) continue;
+        const d = Math.sqrt(d2), nx = dx / d, ny = dy / d, overlap = (min - d) / 2;
+        a.x -= nx * overlap; a.y -= ny * overlap; b.x += nx * overlap; b.y += ny * overlap;
+        const rel = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
+        if (rel > 0) {
+          const imp = rel * .95;
+          a.vx -= imp * nx; a.vy -= imp * ny; b.vx += imp * nx; b.vy += imp * ny;
+          if (rel > 1.5) sfx.knock(rel);
+        }
+      }
+    }
+  }
+
+  /* ---------- input ---------- */
+  function hit(px, py) {
+    let bestB = null, bd = (R * 1.25) ** 2;
+    for (const b of balls) { const d = (b.x - px) ** 2 + (b.y - py) ** 2; if (d < bd) { bd = d; bestB = b; } }
+    return bestB;
+  }
+  cv.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (!running || paused || ended) return;
+    const r = cv.getBoundingClientRect();
+    const b = hit((e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height);
+    if (!b) return;
+    hintSet = [];
+    if (selected.includes(b)) { selected = selected.filter(x => x !== b); sfx.click(); return updateSum(); }
+    selected.push(b);
+    const s = sumSel();
+    if (s === TARGET) shoot();
+    else if (s > TARGET) { sfx.bad(); updateSum(true); setTimeout(() => { selected = []; updateSum(); }, 300); }
+    else { sfx.click(); updateSum(); }
+  });
+
+  const sumSel = () => selected.reduce((a, b) => a + b.v, 0);
+
+  function shoot() {
+    const shot = selected; selected = [];
+    const now = performance.now();
+    combo = lastShot && now - lastShot < 3500 ? Math.min(combo + 1, 5) : 1;
+    lastShot = now;
+    const k = shot.length, pts = 11 * k * k * combo * level;
+    score += pts; sunk += k;
+    let cx = 0, cy = 0; shot.forEach(b => { cx += b.x; cy += b.y; });
+    floats.push({ text: '+' + pts.toLocaleString(), x: cx / k, y: cy / k, t: 0 });
+    shot.forEach(b => {
+      balls.splice(balls.indexOf(b), 1);
+      const p = POCKETS.reduce((m, q) => ((q[0] - b.x) ** 2 + (q[1] - b.y) ** 2 < (m[0] - b.x) ** 2 + (m[1] - b.y) ** 2 ? q : m));
+      sinking.push({ v: b.v, sx: b.x, sy: b.y, px: p[0], py: p[1], t: 0 });
+    });
+    sfx.sink();
+    updateSum(false, true);
+    const newLevel = 1 + Math.floor(sunk / 20);
+    if (newLevel > level) { level = newLevel; sfx.level(); floats.push({ text: 'LEVEL ' + level, x: W / 2, y: 250, t: 0, big: true }); }
+    updateHud();
+    setTimeout(updateSum, 350);
+  }
+
+  function findSet() {
+    const by = {};
+    balls.forEach(b => (by[b.v] = by[b.v] || []).push(b));
+    const vals = Object.keys(by).map(Number).sort((a, b) => b - a), use = [];
+    const ok = (function dfs(i, rem) {
+      if (rem === 0) return true;
+      if (i >= vals.length) return false;
+      for (let k = Math.min(by[vals[i]].length, rem / vals[i] | 0); k >= 0; k--) { use[i] = k; if (dfs(i + 1, rem - k * vals[i])) return true; }
+      use[i] = 0; return false;
+    })(0, TARGET);
+    if (!ok) return null;
+    const out = []; vals.forEach((v, i) => { for (let k = 0; k < (use[i] || 0); k++) out.push(by[v][k]); });
+    return out;
+  }
+
+  /* ---------- render ---------- */
+  function render(t) {
+    ctx.drawImage(bg, 0, 0, W, H);
+    const sel = new Set(selected), hs = performance.now() < hintUntil ? new Set(hintSet) : null;
+    for (const b of balls) {
+      if (sel.has(b) || (hs && hs.has(b))) {
+        const glow = sel.has(b) ? '#ffd54a' : `rgba(111,240,255,${.5 + .5 * Math.sin(t / 90)})`;
+        ctx.strokeStyle = glow; ctx.lineWidth = 4; ctx.shadowColor = glow; ctx.shadowBlur = 16;
+        ctx.beginPath(); ctx.arc(b.x, b.y, R + 4, 0, TAU); ctx.stroke(); ctx.shadowBlur = 0;
+      }
+      drawBall(b.v, b.x, b.y, sel.has(b) ? 1.08 : 1);
+    }
+    for (const s of sinking) {
+      const e = Math.min(1, s.t), q = e * e;
+      drawBall(s.v, s.sx + (s.px - s.sx) * q, s.sy + (s.py - s.sy) * q, 1 - .6 * e, 1 - e * .9);
+    }
+    // on-deck tray
+    for (let i = 0; i < queue.length; i++) drawBall(queue[i], 40 + i * 48, 558, .95);
+    // spawn countdown on feeder
+    if (running && !ended) {
+      const p = 1 - Math.max(0, spawnTimer) / spawnInterval();
+      ctx.fillStyle = '#ffd54a'; ctx.fillRect(W / 2 - 22, T.y1 + 10, 44 * Math.min(1, p), 6);
+    }
+    for (const f of floats) {
+      ctx.globalAlpha = 1 - f.t; ctx.fillStyle = f.big ? '#6ff0ff' : '#ffd54a';
+      ctx.font = `900 ${f.big ? 40 : 26}px system-ui,sans-serif`; ctx.textAlign = 'center';
+      ctx.lineWidth = 5; ctx.strokeStyle = '#000a';
+      ctx.strokeText(f.text, f.x, f.y - f.t * 50); ctx.fillText(f.text, f.x, f.y - f.t * 50);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  /* ---------- loop ---------- */
+  let last = performance.now();
+  function loop(t) {
+    const dt = Math.min(50, t - last); last = t;
+    if (running && !paused) {
+      const k = dt / 16.667;
+      step(k / 2); step(k / 2);
+      sinking.forEach(s => s.t += dt / 380); sinking = sinking.filter(s => s.t < 1);
+      floats.forEach(f => f.t += dt / 1000); floats = floats.filter(f => f.t < 1);
+      if (!ended) {
+        spawnTimer -= dt;
+        if (spawnTimer <= 0) {
+          spawnTimer = spawnInterval();
+          feed();
+          if (balls.length > CAPACITY) gameOver('The table overflowed!');
+        }
+        // quiet table with nothing to sink → feed faster
+        if (balls.length && spawnTimer > 400 && !findSetCached()) spawnTimer = Math.min(spawnTimer, 400);
+        updateMeter();
+        if (combo > 1 && performance.now() - lastShot > 3500) { combo = 0; $('combo').textContent = ''; }
+      }
+    }
+    render(t);
+    requestAnimationFrame(loop);
+  }
+  let cacheKey = '', cacheVal = null;
+  function findSetCached() {
+    const key = balls.length + ':' + balls.reduce((a, b) => a + b.v * 31, 0);
+    if (key !== cacheKey) { cacheKey = key; cacheVal = findSet(); }
+    return cacheVal;
+  }
+
+  function gameOver(why) {
+    ended = true; selected = []; updateSum();
+    sfx.lose();
+    const nb = score > best;
+    if (nb) { best = score; try { localStorage.setItem('break11-best', best); } catch (e) {} }
+    updateHud();
+    setTimeout(() => {
+      $('overTitle').textContent = 'Game Over';
+      $('overMsg').innerHTML = `${why}<br>Score <b>${score.toLocaleString()}</b> · Level ${level} · ${sunk} balls sunk`;
+      $('overBest').textContent = nb ? 'New best score!' : `Best: ${best.toLocaleString()}`;
+      $('startBtn').textContent = 'Play Again';
+      $('over').classList.add('show');
+    }, 700);
+  }
+
+  /* ---------- HUD ---------- */
+  function updateHud() {
+    $('score').textContent = score.toLocaleString();
+    $('best').textContent = Math.max(best, score).toLocaleString();
+    $('level').textContent = level;
+    $('sunk').textContent = sunk;
+    $('combo').textContent = combo > 1 ? `COMBO x${combo}` : '';
+  }
+  function updateSum(bad, good) {
+    const el = $('sum');
+    el.textContent = (good ? TARGET : sumSel()) + ' / 11';
+    el.className = 'sum' + (bad ? ' bad' : good ? ' good' : '');
+  }
+  function updateMeter() { $('meter').style.width = Math.min(100, balls.length / CAPACITY * 100) + '%'; }
+
+  $('startBtn').onclick = newGame;
+  $('clearBtn').onclick = () => { selected = []; updateSum(); };
+  $('hintBtn').onclick = () => {
+    if (!running || paused || ended) return;
+    const s = findSet(); if (!s) return;
+    selected = []; updateSum();
+    score = Math.max(0, score - 50); updateHud();
+    hintSet = s; hintUntil = performance.now() + 2000;
+  };
+  $('pauseBtn').onclick = () => {
+    if (!running || ended) return;
+    paused = !paused; $('pauseBtn').textContent = paused ? 'Resume' : 'Pause';
+  };
+  const setSoundIcon = () => $('soundBtn').textContent = soundOn ? '🔊' : '🔇';
+  $('soundBtn').onclick = () => { soundOn = !soundOn; setSoundIcon(); try { localStorage.setItem('break11-sound', soundOn ? 'on' : 'off'); } catch (e) {} };
+  document.addEventListener('visibilitychange', () => { if (document.hidden && running && !ended && !paused) $('pauseBtn').click(); });
+  setSoundIcon();
+  if (best) $('overBest').textContent = `Best: ${best.toLocaleString()}`;
+  // idle table behind the title screen
+  balls = []; sinking = []; floats = []; selected = []; queue = []; bag = [];
+  for (let i = 0; i < 8; i++) queue.push(draw());
+  for (let row = 0; row < 5; row++) for (let i = 0; i <= row; i++) addBall(draw(), W / 2 + (i - row / 2) * (R * 2 + 1), 120 + row * R * 1.75, 0, 0);
+  score = 0; sunk = 0; level = 1; combo = 0;
+  updateHud(); updateSum();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
