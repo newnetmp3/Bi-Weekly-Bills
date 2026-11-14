@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Pocket Eleven</title>
+<meta name="description" content="Tap billiard balls that add up to 11 to sink them. A quick, free puzzle game.">
+<style>
+  :root{
+    --felt:#0f6b3f; --felt-dark:#094a2b; --wood:#5a3216; --wood-light:#8a5428;
+    --ink:#f4efe2; --gold:#ffd54a; --bad:#ff5a4a;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%}
+  body{
+    background:radial-gradient(ellipse at top,#23302a,#0b100d 70%);
+    color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    display:flex;justify-content:center;align-items:flex-start;min-height:100%;
+    user-select:none;-webkit-user-select:none;touch-action:manipulation;
+  }
+  .wrap{width:min(100%,460px);padding:12px 16px 24px}
+  h1{margin:4px 0 2px;text-align:center;font-size:28px;letter-spacing:.06em;
+     font-weight:900;color:var(--gold);text-shadow:0 2px 0 #7a5200,0 4px 10px #000}
+  .tag{text-align:center;margin:0 0 10px;font-size:13px;opacity:.75}
+  .hud{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px}
+  .stat{background:#0006;border:1px solid #fff2;border-radius:10px;padding:5px 4px;text-align:center}
+  .stat b{display:block;font-size:19px;font-variant-numeric:tabular-nums}
+  .stat small{font-size:10px;text-transform:uppercase;letter-spacing:.08em;opacity:.7}
+  .sumbar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;
+          background:#0006;border:1px solid #fff2;border-radius:10px;padding:6px 10px}
+  .sum{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums;transition:color .15s}
+  .sum.bad{color:var(--bad);animation:shake .3s}
+  .sum.good{color:var(--gold)}
+  .combo{font-weight:800;color:var(--gold);font-size:14px;min-width:60px;text-align:right}
+  @keyframes shake{25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}
+
+  .rail{background:linear-gradient(var(--wood-light),var(--wood));padding:12px;border-radius:18px;
+        box-shadow:inset 0 2px 0 #ffffff30,0 10px 30px #000a}
+  .table{position:relative;aspect-ratio:5/6;border-radius:8px;overflow:hidden;container-type:inline-size;
+         background:radial-gradient(ellipse at 50% 40%,var(--felt),var(--felt-dark));
+         box-shadow:inset 0 0 30px #0009}
+  .slot{position:absolute;width:20%;height:16.6667%;transition:top .38s cubic-bezier(.45,.05,.55,1.25);cursor:pointer}
+  .orb{position:absolute;inset:7%;border-radius:50%;
+       background:
+         radial-gradient(circle at 32% 26%,#fffc 0,#fff0 26%),
+         radial-gradient(circle at 50% 50%,#0000 52%,#0007 100%),
+         var(--c);
+       box-shadow:0 4px 6px #0008;transition:transform .12s,box-shadow .12s,opacity .28s}
+  .stripe .orb{background:
+         radial-gradient(circle at 32% 26%,#fffc 0,#fff0 26%),
+         radial-gradient(circle at 50% 50%,#0000 52%,#0007 100%),
+         linear-gradient(#f5efe0 0 23%,var(--c) 23% 77%,#f5efe0 77%)}
+  .orb span{position:absolute;left:50%;top:50%;width:46%;height:46%;transform:translate(-50%,-50%);
+            border-radius:50%;background:#fbf8ef;color:#111;display:grid;place-items:center;
+            font-weight:900;font-size:calc(100cqw / 5 * .22);box-shadow:inset 0 -1px 2px #0003}
+  .slot.sel .orb{transform:scale(1.08);box-shadow:0 0 0 3px #fff,0 0 18px 5px var(--gold)}
+  .slot.hint .orb{animation:pulse .7s ease-in-out 3}
+  @keyframes pulse{50%{box-shadow:0 0 0 3px #7ff,0 0 20px 6px #7ff}}
+  .slot.sink .orb{transform:scale(.15) rotate(180deg);opacity:0;transition:transform .3s ease-in,opacity .3s ease-in}
+  .float{position:absolute;pointer-events:none;font-weight:900;color:var(--gold);
+         font-size:calc(100cqw * .07);text-shadow:0 2px 4px #000;transform:translate(-50%,-50%);
+         animation:rise 1s ease-out forwards}
+  @keyframes rise{to{transform:translate(-50%,-160%);opacity:0}}
+
+  .deck{display:flex;align-items:center;gap:8px;margin:10px 0 8px;font-size:12px;opacity:.9}
+  .deck .mini{display:flex;gap:4px}
+  .deck .mini .slot{position:relative;width:26px;height:26px;transition:none;cursor:default;container-type:inline-size}
+  .deck .mini .orb span{font-size:11px}
+  .btns{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+  button{font:inherit;font-weight:700;font-size:14px;border:0;border-radius:10px;padding:11px 4px;
+         background:#e9e2cf;color:#222;cursor:pointer;box-shadow:0 3px 0 #9b927a}
+  button:active{transform:translateY(2px);box-shadow:0 1px 0 #9b927a}
+  button.primary{background:var(--gold);box-shadow:0 3px 0 #a7861a}
+  .help{font-size:13px;line-height:1.45;opacity:.8;margin-top:12px}
+  .help b{color:var(--gold)}
+
+  .overlay{position:absolute;inset:0;background:#000b;display:none;flex-direction:column;
+           align-items:center;justify-content:center;text-align:center;padding:20px;z-index:5}
+  .overlay.show{display:flex}
+  .overlay h2{margin:0 0 6px;color:var(--gold);font-size:calc(100cqw * .09)}
+  .overlay p{margin:4px 0;font-size:calc(100cqw * .05)}
+  .overlay button{margin-top:14px;padding:12px 26px;font-size:17px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>POCKET ELEVEN</h1>
+  <p class="tag">Sink balls that add up to 11</p>
+
+  <div class="hud">
+    <div class="stat"><b id="score">0</b><small>Score</small></div>
+    <div class="stat"><b id="best">0</b><small>Best</small></div>
+    <div class="stat"><b id="left">0</b><small>Rack</small></div>
+    <div class="stat"><b id="time">0:00</b><small>Time</small></div>
+  </div>
+
+  <div class="sumbar">
+    <span>Total: <span class="sum" id="sum">0</span> / 11</span>
+    <span class="combo" id="combo"></span>
+  </div>
+
+  <div class="rail">
+    <div class="table" id="table">
+      <div class="overlay" id="over">
+        <h2 id="overTitle">Game Over</h2>
+        <p id="overMsg"></p>
+        <p id="overBest"></p>
+        <button class="primary" id="again">Play Again</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="deck"><span>On deck:</span><div class="mini" id="mini"></div></div>
+
+  <div class="btns">
+    <button class="primary" id="newBtn">New</button>
+    <button id="clearBtn">Clear</button>
+    <button id="hintBtn">Hint</button>
+    <button id="soundBtn">Sound</button>
+  </div>
+
+  <div class="help">
+    Tap any balls, anywhere on the table, that add up to exactly <b>11</b> to sink them.
+    The <b>11</b> ball sinks on its own. Sinking more balls at once scores more
+    (2 balls = 44, 3 = 99, 4 = 176…). Make shots quickly to build a <b>combo</b>.
+    New balls drop in from the rack. Clear the whole table for a <b>1,100</b> bonus.
+    A hint costs 50 points. The game ends when no 11 is left.
+  </div>
+</div>
+
+<script>
+(() => {
+  const COLS = 5, ROWS = 6, TARGET = 11, COMBO_WINDOW = 4000;
+  const COLORS = {1:'#f4c20d',2:'#1d4fc4',3:'#d7261e',4:'#5d2b8c',5:'#f2760f',6:'#147a3c',
+                  7:'#7b1c1c',8:'#161616',9:'#f4c20d',10:'#1d4fc4',11:'#d7261e'};
+  const $ = id => document.getElementById(id);
+  const table = $('table');
+
+  let grid, rack, selected, score, combo, lastClear, busy, best = 0, startTime, timerId, over, soundOn = true;
+
+  try { best = +localStorage.getItem('pocket11-best') || 0; } catch (e) {}
+  try { soundOn = localStorage.getItem('pocket11-sound') !== 'off'; } catch (e) {}
+
+  /* ---------- sound (synthesized) ---------- */
+  let actx;
+  function tone(freq, dur, type = 'sine', vol = .15, slide = 0) {
+    if (!soundOn) return;
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+      o.type = type; o.frequency.setValueAtTime(freq, t);
+      if (slide) o.frequency.exponentialRampToValueAtTime(slide, t + dur);
+      g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.001, t + dur);
+      o.connect(g).connect(actx.destination); o.start(t); o.stop(t + dur);
+    } catch (e) {}
+  }
+  const sfx = {
+    click: () => tone(900, .05, 'triangle', .12),
+    clack: () => { tone(1400, .04, 'square', .08); setTimeout(() => tone(300, .25, 'sine', .2, 90), 40); },
+    bad:   () => tone(140, .25, 'sawtooth', .1),
+    win:   () => [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => tone(f, .25, 'triangle', .15), i * 120)),
+    lose:  () => [392, 330, 262].forEach((f, i) => setTimeout(() => tone(f, .3, 'triangle', .13), i * 160)),
+  };
+
+  /* ---------- setup ---------- */
+  function buildRack() {
+    const r = [];
+    for (let i = 0; i < 7; i++) for (let a = 1; a <= 5; a++) r.push(a, TARGET - a);
+    for (let i = 0; i < 8; i++) r.push(TARGET);
+    for (let i = r.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [r[i], r[j]] = [r[j], r[i]]; }
+    return r;
+  }
+
+  function makeBallEl(v) {
+    const el = document.createElement('div');
+    el.className = 'slot' + (v > 8 ? ' stripe' : '');
+    el.style.setProperty('--c', COLORS[v]);
+    el.innerHTML = `<div class="orb"><span>${v}</span></div>`;
+    return el;
+  }
+
+  function spawn(v) {
+    const b = { v, el: makeBallEl(v) };
+    b.el.addEventListener('pointerdown', e => { e.preventDefault(); tap(b); });
+    table.appendChild(b.el);
+    return b;
+  }
+
+  function place(b, c, r) {
+    b.c = c; b.r = r;
+    b.el.style.left = (c * 100 / COLS) + '%';
+    b.el.style.top = (r * 100 / ROWS) + '%';
+  }
+
+  function newGame() {
+    table.querySelectorAll('.slot,.float').forEach(n => n.remove());
+    $('over').classList.remove('show');
+    grid = Array.from({ length: COLS }, () => Array(ROWS).fill(null));
+    rack = buildRack();
+    selected = new Set(); score = 0; combo = 0; lastClear = 0; busy = false; over = false;
+    startTime = Date.now();
+    clearInterval(timerId); timerId = setInterval(updateTime, 500);
+    settle();
+    updateHud();
+  }
+
+  /* ---------- gravity / refill ---------- */
+  function settle() {
+    const drops = [];
+    for (let c = 0; c < COLS; c++) {
+      const existing = grid[c].filter(Boolean);
+      const need = ROWS - existing.length;
+      const fresh = [];
+      for (let k = 0; k < need && rack.length; k++) fresh.push(spawn(rack.pop()));
+      const col = Array(ROWS - existing.length - fresh.length).fill(null).concat(fresh, existing);
+      fresh.forEach((b, i) => { place(b, c, i - fresh.length - 1); b.el.style.transition = 'none'; });
+      grid[c] = col;
+      col.forEach((b, r) => b && drops.push([b, c, r]));
+    }
+    table.offsetHeight; // reflow so new balls start above the table
+    drops.forEach(([b, c, r]) => { b.el.style.transition = ''; place(b, c, r); });
+    updateHud();
+  }
+
+  const allBalls = () => grid.flat().filter(Boolean);
+
+  /* find a set of balls that sums to TARGET (grouped by value, tiny search) */
+  function findSet() {
+    const by = {};
+    allBalls().forEach(b => (by[b.v] = by[b.v] || []).push(b));
+    const vals = Object.keys(by).map(Number).sort((a, b) => b - a);
+    const use = [];
+    (function dfs(i, rem) {
+      if (rem === 0) return true;
+      if (i >= vals.length) return false;
+      const v = vals[i];
+      for (let k = Math.min(by[v].length, rem / v | 0); k >= 0; k--) {
+        use[i] = k; if (dfs(i + 1, rem - k * v)) return true;
+      }
+      use[i] = 0; return false;
+    })(0, TARGET) || (use.length = 0, use.push(-1));
+    if (use[0] === -1) return null;
+    const out = [];
+    vals.forEach((v, i) => { for (let k = 0; k < (use[i] || 0); k++) out.push(by[v][k]); });
+    return out.length ? out : null;
+  }
+
+  /* ---------- play ---------- */
+  function sumSel() { let s = 0; selected.forEach(b => s += b.v); return s; }
+
+  function tap(b) {
+    if (busy || over) return;
+    table.querySelectorAll('.hint').forEach(n => n.classList.remove('hint'));
+    if (selected.has(b)) { selected.delete(b); b.el.classList.remove('sel'); sfx.click(); updateSum(); return; }
+    selected.add(b); b.el.classList.add('sel');
+    const s = sumSel();
+    if (s === TARGET) { sink(); }
+    else if (s > TARGET) {
+      sfx.bad(); updateSum(true); busy = true;
+      setTimeout(() => { clearSel(); busy = false; }, 350);
+    } else { sfx.click(); updateSum(); }
+  }
+
+  function clearSel() { selected.forEach(b => b.el.classList.remove('sel')); selected.clear(); updateSum(); }
+
+  function sink() {
+    busy = true;
+    const balls = [...selected];
+    const k = balls.length;
+    const now = Date.now();
+    combo = (now - lastClear < COMBO_WINDOW && lastClear) ? Math.min(combo + 1, 5) : 1;
+    lastClear = now;
+    const pts = 11 * k * k * combo;
+    score += pts;
+
+    let cx = 0, cy = 0;
+    balls.forEach(b => { cx += b.c; cy += b.r; });
+    floatText(`+${pts}`, (cx / k + .5) * 100 / COLS, (cy / k + .5) * 100 / ROWS);
+
+    sfx.clack();
+    updateSum(false, true);
+    balls.forEach(b => { b.el.classList.remove('sel'); b.el.classList.add('sink'); grid[b.c][b.r] = null; });
+    selected.clear();
+    updateHud();
+
+    setTimeout(() => {
+      balls.forEach(b => b.el.remove());
+      settle();
+      setTimeout(() => { busy = false; updateSum(); checkEnd(); }, 420);
+    }, 300);
+  }
+
+  function checkEnd() {
+    const left = allBalls().length;
+    if (left === 0 && rack.length === 0) {
+      score += 1100; finish('Table Cleared!', 'Bonus +1,100'); sfx.win();
+    } else if (!findSet()) {
+      finish('No More 11s', `${left + rack.length} balls left`); sfx.lose();
+    }
+  }
+
+  function finish(title, msg) {
+    over = true; clearInterval(timerId);
+    const newBest = score > best;
+    if (newBest) { best = score; try { localStorage.setItem('pocket11-best', best); } catch (e) {} }
+    updateHud();
+    $('overTitle').textContent = title;
+    $('overMsg').textContent = `${msg} · Score ${score.toLocaleString()}`;
+    $('overBest').textContent = newBest ? 'New best score!' : `Best: ${best.toLocaleString()}`;
+    $('over').classList.add('show');
+  }
+
+  function hint() {
+    if (busy || over) return;
+    clearSel();
+    const set = findSet();
+    if (!set) return checkEnd();
+    score = Math.max(0, score - 50); updateHud();
+    set.forEach(b => { b.el.classList.remove('hint'); void b.el.offsetWidth; b.el.classList.add('hint'); });
+  }
+
+  function floatText(txt, x, y) {
+    const f = document.createElement('div');
+    f.className = 'float'; f.textContent = txt;
+    f.style.left = x + '%'; f.style.top = y + '%';
+    table.appendChild(f);
+    setTimeout(() => f.remove(), 1000);
+  }
+
+  /* ---------- HUD ---------- */
+  function updateSum(bad, good) {
+    const el = $('sum');
+    el.textContent = good ? TARGET : sumSel();
+    el.classList.toggle('bad', !!bad);
+    el.classList.toggle('good', !!good);
+  }
+  function updateHud() {
+    $('score').textContent = score.toLocaleString();
+    $('best').textContent = Math.max(best, score).toLocaleString();
+    $('left').textContent = rack.length;
+    $('combo').textContent = combo > 1 && Date.now() - lastClear < COMBO_WINDOW ? `COMBO x${combo}` : '';
+    const mini = $('mini'); mini.innerHTML = '';
+    rack.slice(-5).reverse().forEach(v => mini.appendChild(makeBallEl(v)));
+  }
+  function updateTime() {
+    const s = (Date.now() - startTime) / 1000 | 0;
+    $('time').textContent = `${s / 60 | 0}:${String(s % 60).padStart(2, '0')}`;
+    if (combo > 1 && Date.now() - lastClear >= COMBO_WINDOW) $('combo').textContent = '';
+  }
+  function updateSoundBtn() { $('soundBtn').textContent = soundOn ? 'Sound: On' : 'Sound: Off'; }
+
+  $('newBtn').onclick = newGame;
+  $('again').onclick = newGame;
+  $('clearBtn').onclick = () => { if (!busy) clearSel(); };
+  $('hintBtn').onclick = hint;
+  $('soundBtn').onclick = () => {
+    soundOn = !soundOn; updateSoundBtn();
+    try { localStorage.setItem('pocket11-sound', soundOn ? 'on' : 'off'); } catch (e) {}
+  };
+  updateSoundBtn();
+  newGame();
+})();
+</script>
+</body>
+</html>
